@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rascal-cinema"
+version = "2.0.0"
+description = "Rascal Does Not Dream of Cinema — reseñas, analítica y streaming P2P estilo Letterboxd"
+requires-python = ">=3.11"
+readme = "README.md"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"rascal.streaming" = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+markers = ["p2p: prueba BitTorrent real en loopback (requiere libtorrent + ffmpeg)"]
+filterwarnings = ["ignore::DeprecationWarning:starlette.*", "ignore::DeprecationWarning:fastapi.*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"

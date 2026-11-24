@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest>=8,<10
+mongomock>=4.1,<5
+pymongo>=4.10,<5
+Werkzeug>=3,<4    # sólo para generar hashes heredados en tests

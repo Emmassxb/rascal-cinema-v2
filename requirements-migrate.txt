@@ -1,0 +1,2 @@
+# Sólo para scripts/migrate_from_mongo.py
+pymongo>=4.10,<5

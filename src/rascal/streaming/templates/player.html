@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$title</title>
+<link href="https://cdn.jsdelivr.net/npm/video.js@8.10.0/dist/video-js.min.css" rel="stylesheet">
+<style>
+  :root { --bg:#14181c; --panel:#1c2228; --text:#e8eaed; --muted:#8899aa; --accent:#00e054; }
+  html,body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap { position:relative; max-width:1280px; margin:0 auto; }
+  .video-js .vjs-play-progress, .video-js .vjs-volume-level { background:var(--accent); }
+  #overlay { position:absolute; inset:0 0 auto 0; aspect-ratio:16/9; display:flex; flex-direction:column; align-items:center;
+             justify-content:center; gap:10px; background:rgba(20,24,28,.88); pointer-events:none; text-align:center; padding:12px; }
+  #overlay.hidden { display:none; }
+  .spinner { width:42px; height:42px; border:4px solid #333; border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .bar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:8px 10px; background:var(--panel); font-size:13px; color:var(--muted); }
+  .bar strong { color:var(--text); }
+  .progress { flex:1 1 160px; height:6px; background:#2c3440; border-radius:3px; overflow:hidden; }
+  .progress > div { height:100%; width:0; background:var(--accent); transition:width .5s; }
+  #seek { display:none; gap:6px; align-items:center; }
+  #seek input { width:70px; background:#0f1316; color:var(--text); border:1px solid #2c3440; border-radius:4px; padding:3px 6px; }
+  #seek button { background:var(--accent); color:#000; border:0; border-radius:4px; padding:4px 10px; cursor:pointer; }
+  #msg { color:#f5a623; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <video id="player" class="video-js vjs-big-play-centered vjs-fluid" controls preload="auto" playsinline></video>
+  <div id="overlay"><div class="spinner"></div><div id="overlay-text">Conectando con peers…</div></div>
+  <div class="bar">
+    <span id="state">—</span>
+    <div class="progress" title="Archivo descargado"><div id="progress"></div></div>
+    <span id="rates">—</span>
+    <form id="seek">
+      <span>Ir a</span><input id="seek-input" placeholder="mm:ss" aria-label="Posición mm:ss">
+      <button type="submit">Ir</button><span id="clock"></span>
+    </form>
+    <span id="msg"></span>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/video.js@8.10.0/dist/video.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var cfg = $config_json;
+  var FFMPEG_MODES = ["remux", "remux_audio", "transcode"];
+  var usesFfmpeg = function (mode) { return FFMPEG_MODES.indexOf(mode) !== -1; };
+  var player = videojs("player", { fluid: true, controls: true, preload: "auto", playbackRates: [0.75, 1, 1.25, 1.5] });
+  var offset = 0, started = false, switched = false;
+  var el = function (id) { return document.getElementById(id); };
+
+  function fmtTime(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    var mm = (h ? String(m).padStart(2, "0") : String(m)), ss = String(sec).padStart(2, "0");
+    return (h ? h + ":" : "") + mm + ":" + ss;
+  }
+  function setSource(startS) {
+    if (!usesFfmpeg(cfg.mode)) {
+      player.src({ src: cfg.streamUrl, type: cfg.mime });
+    } else {
+      offset = startS || 0;
+      player.src({ src: cfg.remuxUrl + "&start=" + offset, type: "video/mp4" });
+    }
+  }
+  function showSeek() {
+    // fMP4 progresivo no permite seek nativo: se reinicia el remux desde la posición pedida
+    el("seek").style.display = usesFfmpeg(cfg.mode) ? "flex" : "none";
+  }
+
+  setSource(0);
+  showSeek();
+
+  player.on("playing", function () { started = true; el("overlay").classList.add("hidden"); });
+  player.on("timeupdate", function () {
+    if (usesFfmpeg(cfg.mode)) {
+      el("clock").textContent = fmtTime(offset + player.currentTime()) + (cfg.durationS ? " / " + fmtTime(cfg.durationS) : "");
+    }
+  });
+  player.on("error", function () {
+    // Fallback: si el navegador no decodifica el contenedor/códec directo, se pasa a remux.
+    if (!usesFfmpeg(cfg.mode) && !switched) {
+      switched = true;
+      cfg.mode = "remux";
+      el("msg").textContent = "Formato no soportado directamente: usando remux al vuelo.";
+      player.error(null);
+      setSource(0);
+      showSeek();
+      player.play();
+    }
+  });
+  el("seek").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var parts = el("seek-input").value.trim().split(":").map(Number);
+    if (parts.some(isNaN)) { return; }
+    var seconds = parts.reduce(function (acc, v) { return acc * 60 + v; }, 0);
+    setSource(seconds);
+    player.play();
+  });
+
+  function render(s) {
+    var pct = Math.round((s.progress || 0) * 1000) / 10;
+    el("progress").style.width = pct + "%";
+    el("state").innerHTML = "<strong>" + (s.state || "—") + "</strong> · " + pct + "%";
+    var mbps = ((s.download_rate || 0) / 1048576).toFixed(2);
+    el("rates").textContent = mbps + " MB/s · " + (s.num_peers || 0) + " peers";
+    if (s.error) { el("msg").textContent = s.error; }
+    if (s.playback_mode === "unsupported") {
+      el("msg").textContent = "Este archivo no es reproducible en el navegador sin transcodificar.";
+    }
+    if (!started) {
+      var ready = (s.head_ready && s.tail_ready) || (s.progress || 0) >= 1;
+      el("overlay-text").textContent = ready ? "Preparando reproducción…"
+        : (s.has_metadata ? "Descargando cabecera e índice del video… " + pct + "%" : "Obteniendo metadata del torrent…");
+    }
+    if (s.playback_mode && s.playback_mode !== "unknown" && s.playback_mode !== "unsupported"
+        && usesFfmpeg(s.playback_mode) !== usesFfmpeg(cfg.mode) && !switched) {
+      window.location.reload(); // el probe determinó otra estrategia de entrega
+    }
+  }
+  function poll() {
+    fetch(cfg.statusUrl, { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) { if (s) { render(s); } })
+      .catch(function () {})
+      .then(function () { setTimeout(poll, 2000); });
+  }
+  poll();
+})();
+</script>
+</body>
+</html>
