@@ -1,0 +1,32 @@
+{% macro movie_grid(cards) %}
+{% if cards %}
+<div class="grid">
+  {% for m in cards %}
+  <a class="card" href="/movie/{{ m.slug }}" style="text-decoration:none;">
+    <div class="poster-wrap">
+      {% if m.poster_path %}
+        <img src="{{ m.poster_path }}" alt="{{ m.title }}" onerror="this.style.display='none';this.nextElementSibling.style.display='block';">
+        <div class="poster-fallback" style="display:none;">{{ m.title }}<br><small>{{ m.release_year or '' }}</small></div>
+      {% else %}
+        <div class="poster-fallback">{{ m.title }}<br><small>{{ m.release_year or '' }}</small></div>
+      {% endif %}
+    </div>
+    <div class="card-body">
+      <div class="card-title">{{ m.title }}</div>
+      <div class="card-meta">
+        <span>{{ m.release_year or '—' }}</span>
+        <span class="stars">{% if m.average_stars %}★ {{ '%.1f'|format(m.average_stars) }}{% else %}—{% endif %}</span>
+      </div>
+      {% if m.characters %}
+        <div style="font-size:0.78rem;color:var(--blue);margin-top:4px;">como {{ m.characters|join(', ') }}</div>
+      {% elif m.roles %}
+        <div style="font-size:0.78rem;color:var(--muted);margin-top:4px;">{{ m.roles|map(attribute='value')|join(', ') }}</div>
+      {% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+  <p style="color:var(--muted);">No hay películas en esta sección todavía.</p>
+{% endif %}
+{% endmacro %}

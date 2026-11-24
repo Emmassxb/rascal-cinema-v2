@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Ajustes de la cuenta</h1>
+<p class="muted">Sesión de <strong>@{{ viewer.username }}</strong> · rol <span class="badge">{{ viewer.role.value }}</span></p>
+
+<div class="settings-grid">
+
+  {# ─── Perfil y foto ─── #}
+  <form class="panel" method="post" action="/settings/profile" enctype="multipart/form-data">
+    <h2>Perfil</h2>
+    <div class="avatar-edit">
+      {% set current = media_url(prof.user.avatar_path) %}
+      {% if current %}<img class="avatar avatar-lg" src="{{ current }}" alt="Foto actual">
+      {% else %}<div class="avatar avatar-lg avatar-fallback" aria-hidden="true">{{ viewer.username[:1]|upper }}</div>{% endif %}
+      <div>
+        <label>Subir foto (PNG, JPG o WebP · máx. 2 MB)</label>
+        <input type="file" name="avatar_file" accept="image/png,image/jpeg,image/webp">
+        <label>…o una URL de imagen externa</label>
+        <input type="url" name="avatar_url" placeholder="https://..." value="{{ prof.user.avatar_path if prof.user.avatar_path and prof.user.avatar_path.startswith('http') else '' }}">
+        <label class="check-row"><input type="checkbox" name="remove_avatar" value="1"> Quitar foto de perfil</label>
+      </div>
+    </div>
+    <label>Nombre a mostrar</label>
+    <input type="text" name="display_name" maxlength="80" value="{{ prof.user.display_name or '' }}">
+    <label>Biografía</label>
+    <textarea name="bio" maxlength="2000" placeholder="Cuéntanos qué te gusta ver">{{ prof.bio or '' }}</textarea>
+    <button class="btn" type="submit" style="margin-top:12px;">Guardar perfil</button>
+  </form>
+
+  {# ─── Favoritas ─── #}
+  <div class="panel">
+    <h2>Películas favoritas</h2>
+    <p class="muted small">Se muestran fijadas en tu perfil (las 4 primeras). Puedes tener hasta 10.</p>
+    {% if favorites %}
+      <ul class="fav-list">
+        {% for m in favorites %}
+          <li>
+            <span>{{ loop.index }}. {{ m.title }}{% if m.release_year %} <span class="muted">({{ m.release_year }})</span>{% endif %}</span>
+            <form method="post" action="/settings/favorites/remove/{{ m.id }}"><button class="btn btn-danger btn-sm" type="submit">Quitar</button></form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">Todavía no tienes favoritas.</p>
+    {% endif %}
+
+    <form method="get" action="/settings" class="search-inline">
+      <input type="text" name="q" value="{{ q_fav or '' }}" placeholder="Buscar película para añadir…">
+      <button class="btn btn-secondary" type="submit">Buscar</button>
+    </form>
+    {% if hits %}
+      <ul class="fav-list">
+        {% for h in hits %}
+          <li>
+            <span>{{ h.title }}{% if h.subtitle %} <span class="muted">{{ h.subtitle }}</span>{% endif %}</span>
+            <form method="post" action="/settings/favorites/add/{{ h.id }}"><button class="btn btn-sm" type="submit">Añadir</button></form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% elif q_fav %}
+      <p class="muted">Sin resultados para “{{ q_fav }}”.</p>
+    {% endif %}
+  </div>
+
+  {# ─── Contraseña ─── #}
+  <form class="panel" method="post" action="/settings/password">
+    <h2>Cambiar contraseña</h2>
+    <label>Contraseña actual</label>
+    <input type="password" name="current_password" required autocomplete="current-password">
+    <label>Nueva contraseña (mínimo 10, letras y números/símbolos)</label>
+    <input type="password" name="new_password" required minlength="10" autocomplete="new-password">
+    <button class="btn" type="submit" style="margin-top:12px;">Actualizar contraseña</button>
+  </form>
+
+  {# ─── Solicitud Partner ─── #}
+  <div class="panel">
+    <h2>Cuenta Partner</h2>
+    {% if viewer.role.value == 'user' %}
+      {% if partner_req and partner_req.status.value == 'pending' %}
+        <div class="alert ok" style="margin:0;">Solicitud <strong>pendiente</strong> desde {{ partner_req.created_at.strftime('%d/%m/%Y') }}. Un administrador la revisará.</div>
+      {% else %}
+        {% if partner_req and partner_req.status.value == 'approved' %}
+          <div class="alert ok" style="margin:0 0 12px;">Tu última solicitud fue <strong>aprobada</strong>.</div>
+        {% elif partner_req and partner_req.status.value == 'rejected' %}
+          <div class="alert error" style="margin:0 0 12px;">Tu última solicitud fue <strong>rechazada</strong>. Puedes enviar una nueva con más detalle.</div>
+        {% endif %}
+        <form method="post" action="/settings/partner-request">
+          <p class="muted small">Los partners pueden crear fichas, editar metadatos y gestionar torrents y subtítulos.</p>
+          <label>Nombre público (opcional)</label>
+          <input type="text" name="display_name" maxlength="80">
+          <label>¿Por qué quieres ser partner? (mínimo 30 caracteres)</label>
+          <textarea name="reason" minlength="30" maxlength="2000" required></textarea>
+          <label>Enlace a tu portafolio o trabajo (opcional)</label>
+          <input type="url" name="portfolio_url" placeholder="https://...">
+          <button class="btn" type="submit" style="margin-top:12px;">Enviar solicitud</button>
+        </form>
+      {% endif %}
+    {% else %}
+      <p class="muted">Tu cuenta ya tiene permisos de {{ 'administrador' if viewer.role.value == 'admin' else 'partner' }}.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

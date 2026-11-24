@@ -16,3 +16,8 @@ var/downloads/
 var/subtitles/
 dist/
 build/
+var/avatars/
+var/secrets.json
+*.spec
+*.zip
+*.patch

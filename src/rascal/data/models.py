@@ -40,6 +40,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -47,6 +48,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from rascal.data.enums import (
     ColorKind,
     CreditRole,
+    PartnerRequestStatus,
     PlaybackMode,
     Role,
     SourceKind,
@@ -373,6 +375,8 @@ class MediaSource(Base):
     movie_id: Mapped[int] = mapped_column(ForeignKey("movies.id", ondelete="CASCADE"), index=True)
     kind: Mapped[SourceKind] = mapped_column(_enum(SourceKind, "source_kind"))
     label: Mapped[str] = mapped_column(String(120), default="Principal")
+    audio_language: Mapped[str | None] = mapped_column(String(40))  # "Español Latino", "Japonés (VO)"
+    quality: Mapped[str | None] = mapped_column(String(20))  # "1080p", "720p", "4K"
     magnet_uri: Mapped[str | None] = mapped_column(Text)
     torrent_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     info_hash: Mapped[str] = mapped_column(String(64), index=True)  # v1 (40 hex) o v2 (64 hex)
@@ -424,4 +428,43 @@ class AuditLog(Base):
     __table_args__ = (
         Index("ix_audit_log_entity", "entity_type", "entity_id"),
         Index("ix_audit_log_created", "created_at"),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Solicitudes para ser Partner
+# ─────────────────────────────────────────────────────────────────────────────
+class PartnerRequest(Base):
+    """Solicitud de un usuario para obtener el rol ``partner``.
+
+    Un usuario sólo puede tener UNA solicitud pendiente a la vez; la restricción se aplica
+    en la base de datos con un índice único parcial (SQLite y PostgreSQL lo soportan).
+    """
+
+    __tablename__ = "partner_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    status: Mapped[PartnerRequestStatus] = mapped_column(
+        _enum(PartnerRequestStatus, "partner_request_status"),
+        default=PartnerRequestStatus.PENDING,
+        index=True,
+    )
+    display_name: Mapped[str | None] = mapped_column(String(80))
+    reason: Mapped[str] = mapped_column(Text)
+    portfolio_url: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, server_default=func.now())
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
+
+    __table_args__ = (
+        Index(
+            "uq_partner_requests_one_pending",
+            "user_id",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text("status = 'pending'"),
+        ),
     )

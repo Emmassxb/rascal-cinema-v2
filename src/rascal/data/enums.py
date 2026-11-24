@@ -55,3 +55,11 @@ class PlaybackMode(StrEnum):
     REMUX_AUDIO = "remux_audio"  # video copiado, audio AC3/DTS/FLAC → AAC
     TRANSCODE = "transcode"  # HEVC/MPEG-4/10-bit → H.264 (costoso, opcional)
     UNSUPPORTED = "unsupported"
+
+
+class PartnerRequestStatus(StrEnum):
+    """Ciclo de vida de una solicitud para convertirse en Partner."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"

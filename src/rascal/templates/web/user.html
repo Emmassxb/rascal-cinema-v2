@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% from "macros.html" import movie_grid %}
+{% block content %}
+{% set base = '/user/' ~ prof.user.username %}
+{% set avatar = media_url(prof.user.avatar_path) %}
+
+<header class="profile-head panel">
+  <div class="profile-id">
+    {% if avatar %}
+      <img class="avatar avatar-lg" src="{{ avatar }}" alt="Foto de {{ prof.user.username }}">
+    {% else %}
+      <div class="avatar avatar-lg avatar-fallback" aria-hidden="true">{{ prof.user.username[:1]|upper }}</div>
+    {% endif %}
+    <div>
+      <h1 class="profile-name">
+        {{ prof.user.display_name or ('@' ~ prof.user.username) }}
+        <span class="badge">{{ prof.role.value }}</span>
+      </h1>
+      <div class="muted small">@{{ prof.user.username }} · miembro desde {{ prof.joined_at.strftime('%m/%Y') }}</div>
+      {% if prof.bio %}<p class="profile-bio">{{ prof.bio }}</p>{% endif %}
+    </div>
+  </div>
+
+  <div class="profile-side">
+    <nav class="counters" aria-label="Estadísticas del perfil">
+      <a href="{{ base }}?tab=diario"><strong>{{ prof.films_logged }}</strong><span>películas</span></a>
+      <a href="{{ base }}?tab=seguidores"><strong>{{ prof.followers }}</strong><span>seguidores</span></a>
+      <a href="{{ base }}?tab=seguidos"><strong>{{ prof.following }}</strong><span>siguiendo</span></a>
+    </nav>
+    {% if viewer and not prof.is_self %}
+      <form method="post" action="/user/{{ prof.user.username }}/follow">
+        <button class="btn {{ 'btn-secondary' if prof.is_following else '' }}" type="submit">
+          {{ 'Dejar de seguir' if prof.is_following else 'Seguir' }}
+        </button>
+      </form>
+    {% elif prof.is_self %}
+      <a class="btn btn-secondary" href="/settings">Editar perfil</a>
+    {% endif %}
+  </div>
+</header>
+
+<nav class="tabs" aria-label="Secciones del perfil">
+  {% for key, label in [('perfil','Perfil'), ('diario','Diario'), ('watchlist','Watchlist'), ('favoritas','Favoritas'), ('seguidores','Seguidores'), ('seguidos','Seguidos')] %}
+    <a href="{{ base }}?tab={{ key }}" class="{{ 'active' if tab == key else '' }}" {{ 'aria-current="page"' if tab == key else '' }}>{{ label }}</a>
+  {% endfor %}
+</nav>
+
+{# ─── Perfil: 4 favoritas fijadas, actividad reciente y últimas reseñas ─── #}
+{% if tab == 'perfil' %}
+  <h2 class="section-title">Favoritas</h2>
+  {% if prof.favorites %}
+    <div class="pinned">
+      {% for m in prof.favorites[:4] %}
+        <a class="pinned-card" href="/movie/{{ m.slug }}" title="{{ m.title }}">
+          {% if m.poster_path and media_url(m.poster_path) %}
+            <img src="{{ media_url(m.poster_path) }}" alt="{{ m.title }}" loading="lazy">
+          {% else %}
+            <div class="poster-fallback">{{ m.title }}</div>
+          {% endif %}
+          <span class="pinned-title">{{ m.title }}</span>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">Aún no ha fijado favoritas.{% if prof.is_self %} Añádelas desde <a href="/settings">Ajustes</a>.{% endif %}</p>
+  {% endif %}
+
+  <h2 class="section-title">Actividad reciente</h2>
+  {% for r in prof.recent_reviews[:5] %}
+    <div class="panel activity">
+      <a href="/movie/{{ r.movie_slug }}" class="strong">{{ r.movie_title }}</a>
+      <span class="stars">{{ r.star_label }}</span>
+      {% if r.is_rewatch %}<span class="badge">Rewatch</span>{% endif %}
+      {% if r.body %}<p class="review-body">{{ r.body }}</p>{% endif %}
+    </div>
+  {% else %}
+    <p class="muted">Sin actividad reciente.</p>
+  {% endfor %}
+
+{# ─── Diario: bitácora cronológica por fecha de visionado ─── #}
+{% elif tab == 'diario' %}
+  <h2 class="section-title">Diario</h2>
+  {% if diary %}
+    <ol class="diary">
+      {% for e in diary %}
+        <li class="diary-row">
+          <div class="diary-date">
+            <span class="diary-day">{{ e.day }}</span>
+            <span class="diary-month">{{ e.month_short }} {{ e.year }}</span>
+          </div>
+          {% if e.poster_path and media_url(e.poster_path) %}
+            <img class="diary-poster" src="{{ media_url(e.poster_path) }}" alt="" loading="lazy">
+          {% else %}
+            <div class="diary-poster diary-poster-empty" aria-hidden="true"></div>
+          {% endif %}
+          <div class="diary-main">
+            <a href="/movie/{{ e.movie_slug }}" class="strong">{{ e.movie_title }}</a>
+            <span class="stars">{{ e.star_label or 'Sin calificar' }}</span>
+          </div>
+          <div class="diary-icons">
+            {% if e.is_rewatch %}<span title="Rewatch" aria-label="Rewatch">⟲</span>{% endif %}
+            {% if e.has_review %}<span title="Tiene reseña" aria-label="Tiene reseña">✎</span>{% endif %}
+          </div>
+        </li>
+      {% endfor %}
+    </ol>
+  {% else %}
+    <p class="muted">No hay entradas en el diario todavía.</p>
+  {% endif %}
+
+{# ─── Watchlist y favoritas: cuadrículas ─── #}
+{% elif tab == 'watchlist' %}
+  <h2 class="section-title">Watchlist ({{ prof.watchlist|length }})</h2>
+  {{ movie_grid(prof.watchlist) }}
+
+{% elif tab == 'favoritas' %}
+  <h2 class="section-title">Favoritas ({{ prof.favorites|length }})</h2>
+  {{ movie_grid(prof.favorites) }}
+
+{# ─── Seguidores / seguidos: lista de personas con botón seguir ─── #}
+{% elif tab in ('seguidores', 'seguidos') %}
+  <h2 class="section-title">{{ 'Seguidores' if tab == 'seguidores' else 'Siguiendo' }}</h2>
+  {% for p in people %}
+    <div class="panel person-row">
+      {% set pa = media_url(p.user.avatar_path) %}
+      {% if pa %}<img class="avatar" src="{{ pa }}" alt="">{% else %}<div class="avatar avatar-fallback" aria-hidden="true">{{ p.user.username[:1]|upper }}</div>{% endif %}
+      <div class="person-main">
+        <a href="/user/{{ p.user.username }}" class="strong">{{ p.user.display_name or ('@' ~ p.user.username) }}</a>
+        <div class="muted small">@{{ p.user.username }}</div>
+        {% if p.bio %}<div class="small">{{ p.bio }}</div>{% endif %}
+      </div>
+      {% if viewer and not p.is_self %}
+        <form method="post" action="/user/{{ p.user.username }}/follow">
+          <button class="btn btn-sm {{ 'btn-secondary' if p.is_following else '' }}" type="submit">{{ 'Dejar de seguir' if p.is_following else 'Seguir' }}</button>
+        </form>
+      {% endif %}
+    </div>
+  {% else %}
+    <p class="muted">{{ 'Nadie te sigue todavía.' if tab == 'seguidores' else 'Todavía no sigue a nadie.' }}</p>
+  {% endfor %}
+{% endif %}
+{% endblock %}

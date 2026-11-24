@@ -231,6 +231,8 @@ class CatalogService:
                 movie_id=movie.id,
                 kind=SourceKind.MAGNET,
                 label=form.label,
+                audio_language=form.audio_language,
+                quality=form.quality,
                 magnet_uri=magnet.canonical(),
                 info_hash=magnet.info_hash,
                 display_name=magnet.display_name,
@@ -257,6 +259,8 @@ class CatalogService:
                 movie_id=movie.id,
                 kind=SourceKind.TORRENT_FILE,
                 label=form.label,
+                audio_language=form.audio_language,
+                quality=form.quality,
                 torrent_data=data,
                 info_hash=meta.info_hash,
                 display_name=meta.name,
@@ -273,9 +277,21 @@ class CatalogService:
         self._audit_source(actor, "source.add_torrent", source, extra={"files": len(meta.files), "private": meta.private})
         return source_view(source)
 
-    def update_source(self, source_id: int, *, label: str | None = None, enabled: bool | None = None) -> SourceView:
+    def update_source(
+        self,
+        source_id: int,
+        *,
+        label: str | None = None,
+        enabled: bool | None = None,
+        audio_language: str | None = None,
+        quality: str | None = None,
+    ) -> SourceView:
         source = self._get_source(source_id)
         actor = self._require_sources(source.movie)
+        if audio_language is not None:
+            source.audio_language = audio_language.strip()[:40] or None
+        if quality is not None:
+            source.quality = quality.strip()[:20] or None
         if label is not None:
             label = label.strip()
             if not 1 <= len(label) <= 120:
@@ -288,7 +304,10 @@ class CatalogService:
                 source.status = SourceStatus.PENDING
                 source.status_message = None
         self.session.flush()
-        self._audit_source(actor, "source.update", source, extra={"label": label, "enabled": enabled})
+        self._audit_source(
+            actor, "source.update", source,
+            extra={"label": label, "enabled": enabled, "audio_language": audio_language, "quality": quality},
+        )
         return source_view(source)
 
     def remove_source(self, source_id: int) -> None:

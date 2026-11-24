@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="margin-bottom:14px;"><a href="/partner">← Volver al Panel Partner</a></div>
+<datalist id="audio-options">{% for a in audio_suggestions %}<option value="{{ a }}">{% endfor %}</datalist>
+<datalist id="quality-options">{% for q in quality_suggestions %}<option value="{{ q }}">{% endfor %}</datalist>
+
+<form class="panel" method="post" action="{{ action_url }}" enctype="multipart/form-data" id="movie-editor">
+  <h2>{{ 'Editar Película #' ~ movie_id if movie_id else 'Nueva Película' }}</h2>
+
+  <!-- Importación desde TMDB: sólo rellena campos; todo sigue siendo editable -->
+  <div style="background:var(--surface-2);padding:14px;border-radius:8px;margin-bottom:18px;">
+    <label>Enlace o ID de TMDB</label>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <input type="text" id="tmdb_ref" placeholder="https://www.themoviedb.org/movie/12345-... o 12345" style="flex:1 1 320px;"
+             {{ '' if tmdb_enabled else 'disabled' }}>
+      <button class="btn btn-secondary" type="button" id="tmdb-import" {{ '' if tmdb_enabled else 'disabled' }}>Importar datos de TMDB</button>
+    </div>
+    <small style="color:var(--muted);">
+      {% if tmdb_enabled %}Rellena título, sinopsis, reparto, productoras, imágenes y más. Revisa y ajusta lo que necesites.
+      {% else %}Importación desactivada: define RASCAL_TMDB_API_KEY en .env. Puedes capturar la ficha a mano.{% endif %}
+    </small>
+    <div id="tmdb-status" role="status" style="margin-top:8px;font-size:0.9rem;"></div>
+  </div>
+  <div class="form-grid">
+    <div><label>Título *</label><input type="text" name="title" value="{{ f.title }}" required></div>
+    <div><label>Título original</label><input type="text" name="original_title" value="{{ f.original_title or '' }}"></div>
+    <div><label>Año estreno</label><input type="number" name="release_year" value="{{ f.release_year or '' }}"></div>
+    <div><label>Duración (min)</label><input type="number" name="runtime_min" value="{{ f.runtime_min or '' }}"></div>
+    <div><label>URL Póster</label><input type="text" name="poster_path" value="{{ f.poster_path or '' }}" placeholder="https://..."></div>
+    <div><label>URL Backdrop (imagen de fondo)</label><input type="text" name="backdrop_path" value="{{ f.backdrop_path or '' }}" placeholder="https://..."></div>
+    <div><label>URL Tráiler (YouTube)</label><input type="text" name="trailer_url" value="{{ f.trailer_url or '' }}" placeholder="https://www.youtube.com/watch?v=..."></div>
+    <div><label>IMDb ID</label><input type="text" name="imdb_id" value="{{ f.imdb_id or '' }}" placeholder="tt0114709"></div>
+  </div>
+  <input type="hidden" name="tmdb_id" value="{{ f.tmdb_id or '' }}">
+  <input type="hidden" name="trailer_path" value="{{ f.trailer_path or '' }}">
+  <label>Tagline / Frase promocional</label>
+  <input type="text" name="tagline" value="{{ f.tagline or '' }}">
+  <label>Sinopsis</label>
+  <textarea name="synopsis">{{ f.synopsis or '' }}</textarea>
+
+  <div class="form-grid">
+    <div><label>Géneros (separados por coma)</label><input type="text" name="genres" value="{{ genres_str }}" placeholder="Drama, Ciencia ficción, Animación"></div>
+    <div><label>Productoras (separadas por coma)</label><input type="text" name="companies" value="{{ companies_str }}" placeholder="Blender Foundation, Toho"></div>
+    <div><label>Directores (separados por coma)</label><input type="text" name="directors" value="{{ directors_str }}" placeholder="Makoto Shinkai"></div>
+  </div>
+
+  <div class="form-grid">
+    <div>
+      <label>Reparto (uno por línea: Actor : Personaje)</label>
+      <textarea name="cast" placeholder="Kaito Ishikawa : Sakuta Azusagawa&#10;Asami Seto : Mai Sakurajima">{{ cast_str }}</textarea>
+    </div>
+    <div>
+      <label>Equipo técnico (uno por línea: Nombre : writer/producer/cinematographer/composer/editor)</label>
+      <textarea name="crew" placeholder="Kevin Penkin : composer">{{ crew_str }}</textarea>
+    </div>
+  </div>
+
+  <h3 style="margin-top:16px;font-size:0.95rem;color:var(--muted);">Especificaciones Técnicas</h3>
+  <div class="form-grid">
+    <div><label>Relación de aspecto</label><input type="text" name="aspect_ratio" value="{{ f.tech.aspect_ratio or '' }}" placeholder="16:9 o 2.39:1"></div>
+    <div>
+      <label>Color</label>
+      <select name="color">
+        <option value="">—</option>
+        {% for ck in ColorKind %}
+          <option value="{{ ck.value }}" {{ 'selected' if f.tech.color == ck else '' }}>{{ ck.value }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div><label>Idioma original (ISO)</label><input type="text" name="original_language" value="{{ f.tech.original_language or '' }}" placeholder="ja, en, es"></div>
+    <div><label>País</label><input type="text" name="country" value="{{ f.tech.country or '' }}" placeholder="Japón"></div>
+  </div>
+
+  {% if not movie_id %}
+  <h3 style="margin-top:20px;font-size:0.95rem;color:var(--green);">Archivos Multimedia Iniciales (Opcional al crear)</h3>
+  <div class="form-grid" style="background:var(--surface-2);padding:14px;border-radius:8px;margin-top:8px;">
+    <div>
+      <label>Archivo .torrent</label>
+      <input type="file" name="torrent_file" accept=".torrent,application/x-bittorrent">
+    </div>
+    <div>
+      <label>O enlace Magnet URI</label>
+      <input type="text" name="magnet_uri" placeholder="magnet:?xt=urn:btih:...">
+    </div>
+    <div>
+      <label>Archivo de Subtítulos (.srt o .vtt)</label>
+      <input type="file" name="subtitle_file" accept=".srt,.vtt,text/vtt">
+    </div>
+    <div>
+      <label>Idioma del subtítulo</label>
+      <input type="text" name="subtitle_label" value="Español" placeholder="Español">
+    </div>
+    <div>
+      <label>Etiqueta de fuente P2P</label>
+      <input type="text" name="source_label" value="1080p Principal">
+    </div>
+    <div>
+      <label>Idioma de audio</label>
+      <input type="text" name="source_audio" list="audio-options" placeholder="Español Latino">
+    </div>
+    <div>
+      <label>Calidad</label>
+      <input type="text" name="source_quality" list="quality-options" placeholder="1080p">
+    </div>
+    <div>
+      <label>Declaración de derechos</label>
+      <input type="text" name="rights_statement" value="Distribución autorizada / Dominio público">
+    </div>
+  </div>
+  {% endif %}
+
+  <div style="margin-top:12px;">
+    <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;">
+      <input type="checkbox" name="is_published" value="1" {{ 'checked' if f.is_published else '' }}> Publicada en el catálogo público
+    </label>
+  </div>
+  <button class="btn" type="submit" style="margin-top:14px;">{{ 'Guardar cambios' if movie_id else 'Crear película' }}</button>
+</form>
+
+{% if movie_id %}
+<div class="panel">
+  <h2>Subtítulos (.srt / .vtt)</h2>
+  {% if subtitles %}
+    <div style="margin-bottom:12px;">
+      {% for sub in subtitles %}
+        <span class="pill">💬 {{ sub.label }} ({{ sub.filename }})</span>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p style="color:var(--muted);">No hay subtítulos cargados para esta película.</p>
+  {% endif %}
+  <form method="post" action="/partner/movie/{{ movie_id }}/upload-subtitle" enctype="multipart/form-data" class="form-grid" style="background:var(--surface-2);padding:14px;border-radius:8px;">
+    <div>
+      <label>Archivo de subtítulos (.srt o .vtt) *</label>
+      <input type="file" name="subtitle_file" accept=".srt,.vtt,text/vtt" required>
+    </div>
+    <div>
+      <label>Idioma / Etiqueta</label>
+      <input type="text" name="subtitle_label" value="Español" required>
+    </div>
+    <div style="display:flex;align-items:flex-end;">
+      <button class="btn btn-secondary" type="submit" style="width:100%;">Subir subtítulo</button>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Fuentes de Streaming P2P (.torrent / Magnet)</h2>
+  {% if sources %}
+    <table>
+      <thead><tr><th>Etiqueta</th><th>Idioma / Calidad</th><th>Archivo / Hash</th><th>Códecs / Modo</th><th>Estado</th><th>Acción</th></tr></thead>
+      <tbody>
+        {% for s in sources %}
+          <tr>
+            <td><strong>{{ s.label }}</strong></td>
+            <td>
+              <form method="post" action="/partner/source/{{ s.id }}/update" style="display:grid;gap:4px;min-width:170px;">
+                <input type="hidden" name="movie_id" value="{{ movie_id }}">
+                <input type="text" name="audio_language" list="audio-options" value="{{ s.audio_language or '' }}" placeholder="Idioma" style="padding:4px 6px;">
+                <input type="text" name="quality" list="quality-options" value="{{ s.quality or '' }}" placeholder="Calidad" style="padding:4px 6px;">
+                <button class="btn btn-secondary" type="submit" style="padding:3px 8px;font-size:0.78rem;">Guardar</button>
+              </form>
+            </td>
+            <td>{{ s.file_path or s.display_name or s.info_hash }}<br><small style="color:var(--muted);">{{ s.info_hash }}</small></td>
+            <td>{{ s.container or '?' }} · {{ s.video_codec or '?' }}/{{ s.audio_codec or '?' }} · <span class="badge">{{ s.playback_mode.value }}</span></td>
+            <td>{{ s.status.value }}{% if s.status_message %}<br><small style="color:var(--muted);">{{ s.status_message }}</small>{% endif %}</td>
+            <td>
+              <form method="post" action="/partner/source/{{ s.id }}/delete">
+                <input type="hidden" name="movie_id" value="{{ movie_id }}">
+                <button class="btn btn-danger" type="submit" style="padding:4px 10px;font-size:0.8rem;">Eliminar</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:var(--muted);">Esta película aún no tiene fuentes torrent asociadas.</p>
+  {% endif %}
+
+  <div class="form-grid" style="margin-top:18px;">
+    <form method="post" action="/partner/movie/{{ movie_id }}/upload-torrent" enctype="multipart/form-data" style="background:var(--surface-2);padding:14px;border-radius:8px;">
+      <h3 style="font-size:1rem;">Subir archivo .torrent</h3>
+      <label>Archivo .torrent *</label>
+      <input type="file" name="torrent_file" accept=".torrent,application/x-bittorrent" required>
+      <label>Etiqueta de fuente</label>
+      <input type="text" name="label" value="1080p Principal" required>
+      <label>Idioma de audio</label>
+      <input type="text" name="audio_language" list="audio-options" placeholder="Español Latino">
+      <label>Calidad</label>
+      <input type="text" name="quality" list="quality-options" placeholder="1080p">
+      <label>Declaración de derechos / licencia *</label>
+      <input type="text" name="rights_statement" value="Distribución autorizada / Dominio público" required>
+      <button class="btn" type="submit" style="margin-top:10px;">Subir .torrent e iniciar P2P</button>
+    </form>
+
+    <form method="post" action="/partner/movie/{{ movie_id }}/add-magnet" style="background:var(--surface-2);padding:14px;border-radius:8px;">
+      <h3 style="font-size:1rem;">Añadir enlace Magnet</h3>
+      <label>Magnet URI *</label>
+      <input type="text" name="magnet_uri" placeholder="magnet:?xt=urn:btih:..." required>
+      <label>Etiqueta de fuente</label>
+      <input type="text" name="label" value="1080p Magnet" required>
+      <label>Idioma de audio</label>
+      <input type="text" name="audio_language" list="audio-options" placeholder="Español Latino">
+      <label>Calidad</label>
+      <input type="text" name="quality" list="quality-options" placeholder="1080p">
+      <label>Declaración de derechos / licencia *</label>
+      <input type="text" name="rights_statement" value="Distribución autorizada / Dominio público" required>
+      <button class="btn btn-secondary" type="submit" style="margin-top:10px;">Añadir Magnet e iniciar P2P</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<script>
+(function () {
+  var btn = document.getElementById('tmdb-import');
+  if (!btn) { return; }
+  var status = document.getElementById('tmdb-status');
+  var form = document.getElementById('movie-editor');
+  btn.addEventListener('click', function () {
+    var ref = document.getElementById('tmdb_ref').value.trim();
+    if (!ref) { status.textContent = 'Escribe un enlace o un ID de TMDB.'; return; }
+    btn.disabled = true;
+    status.textContent = 'Consultando TMDB…';
+    fetch('/partner/tmdb-lookup?ref=' + encodeURIComponent(ref), { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.data.ok) { throw new Error(res.data.error || 'No se pudo importar.'); }
+        var filled = 0;
+        Object.keys(res.data.fields).forEach(function (name) {
+          var value = res.data.fields[name];
+          var el = form.elements[name];
+          if (el && value) { el.value = value; filled += 1; }
+        });
+        var note = res.data.filled_from_fallback.length
+          ? ' (algunos textos se tomaron de la versión en inglés)' : '';
+        status.textContent = 'Importados ' + filled + ' campos' + note + '. Revisa antes de guardar.';
+      })
+      .catch(function (err) { status.textContent = err.message; })
+      .then(function () { btn.disabled = false; });
+  });
+})();
+</script>
+{% endblock %}

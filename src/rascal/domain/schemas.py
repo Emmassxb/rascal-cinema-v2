@@ -26,7 +26,15 @@ from pydantic import (
     model_validator,
 )
 
-from rascal.data.enums import ColorKind, CreditRole, PlaybackMode, Role, SourceKind, SourceStatus
+from rascal.data.enums import (
+    ColorKind,
+    CreditRole,
+    PartnerRequestStatus,
+    PlaybackMode,
+    Role,
+    SourceKind,
+    SourceStatus,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tipos reutilizables
@@ -177,10 +185,13 @@ class SourceView(_Frozen):
     movie_id: int
     kind: SourceKind
     label: str
+    audio_language: str | None = None
+    quality: str | None = None
     info_hash: str
     display_name: str | None = None
     file_path: str | None = None
     file_size: int | None = None
+    total_size: int | None = None
     container: str | None = None
     video_codec: str | None = None
     audio_codec: str | None = None
@@ -283,6 +294,42 @@ class UserPublicProfile(_Frozen):
     favorites: list[MovieCard]
     watchlist: list[MovieCard]
     recent_reviews: list[ReviewView]
+
+
+class DiaryEntry(_Frozen):
+    """Una entrada del diario (una reseña/visionado) ya formateada para la plantilla."""
+
+    review_id: int
+    movie_slug: str
+    movie_title: str
+    poster_path: str | None
+    watched_on: date | None  # fecha de visionado; si no se indicó se usa la de creación
+    day: int
+    month_short: str
+    year: int
+    rating: int | None
+    stars: float | None
+    star_label: str
+    is_rewatch: bool
+    has_review: bool  # True si además hay texto
+
+
+class FollowUser(_Frozen):
+    user: UserRef
+    bio: str | None = None
+    is_following: bool = False
+    is_self: bool = False
+
+
+class PartnerRequestView(_Frozen):
+    id: int
+    user: UserRef
+    status: PartnerRequestStatus
+    display_name: str | None
+    reason: str
+    portfolio_url: str | None
+    created_at: datetime
+    reviewed_at: datetime | None = None
 
 
 class SearchHit(_Frozen):
@@ -484,14 +531,40 @@ def _unique_people(items: list[_P], *, with_role: bool = False) -> list[_P]:
     return result
 
 
+def _check_audio(value: str | None) -> str | None:
+    value = _empty_to_none(value)
+    if value is not None and len(value) > 40:
+        raise ValueError("El idioma de audio no puede superar 40 caracteres")
+    return value
+
+
+def _check_quality(value: str | None) -> str | None:
+    value = _empty_to_none(value)
+    if value is not None and len(value) > 20:
+        raise ValueError("La calidad no puede superar 20 caracteres")
+    return value
+
+
+AudioLanguage = Annotated[str | None, AfterValidator(_check_audio)]
+Quality = Annotated[str | None, AfterValidator(_check_quality)]
+
+# Sugerencias para los <datalist> del panel; el partner puede escribir cualquier otro valor.
+AUDIO_LANGUAGE_SUGGESTIONS = ("Español Latino", "Español (España)", "Inglés", "Japonés (VO)", "Coreano (VO)")
+QUALITY_SUGGESTIONS = ("4K", "1080p", "720p", "480p")
+
+
 class MagnetSourceForm(BaseModel):
     magnet_uri: Annotated[str, StringConstraints(strip_whitespace=True, min_length=20, max_length=8192)]
     label: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)] = "Principal"
+    audio_language: AudioLanguage = None
+    quality: Quality = None
     rights_statement: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)]
 
 
 class TorrentSourceForm(BaseModel):
     label: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)] = "Principal"
+    audio_language: AudioLanguage = None
+    quality: Quality = None
     rights_statement: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)]
 
 
@@ -544,6 +617,27 @@ class RegisterForm(BaseModel):
             raise ValueError("La contraseña debe tener al menos 10 caracteres")
         if len(raw) > 128:
             raise ValueError("La contraseña es demasiado larga")
+        if raw.isdigit() or raw.isalpha():
+            raise ValueError("Combina letras y números/símbolos")
+        return value
+
+
+class PartnerRequestForm(BaseModel):
+    display_name: OptionalText = None
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=30, max_length=2000)]
+    portfolio_url: HttpUrlStr = None
+
+
+class PasswordChangeForm(BaseModel):
+    current_password: SecretStr
+    new_password: SecretStr
+
+    @field_validator("new_password")
+    @classmethod
+    def _strength(cls, value: SecretStr) -> SecretStr:
+        raw = value.get_secret_value()
+        if len(raw) < 10 or len(raw) > 128:
+            raise ValueError("La nueva contraseña debe tener entre 10 y 128 caracteres")
         if raw.isdigit() or raw.isalpha():
             raise ValueError("Combina letras y números/símbolos")
         return value

@@ -37,13 +37,15 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session, sessionmaker
 
-from rascal.auth.tokens import TokenError, internal_token, verify_token
+from rascal.auth.tokens import TokenError, internal_token, playback_token, verify_token
 from rascal.config import Settings, get_settings
 from rascal.data.db import get_sessionmaker, session_scope
 from rascal.data.enums import PlaybackMode, SourceStatus
 from rascal.data.models import MediaSource, Movie
 from rascal.data.repositories.media import SourceRepository
 from rascal.domain.playback import MIME_BY_CONTAINER, decide_playback, guess_mode_from_container
+from rascal.media.subtitles import list_subtitles
+from rascal.streaming.downloads import PurgeError, purge_local_download
 from rascal.streaming.engine import EngineListener, MetadataTimeout, SourceSpec, StreamingEngine, build_engine
 from rascal.streaming.http_range import RangeNotSatisfiable, parse_range
 from rascal.streaming.media import build_ffmpeg_command, ffmpeg_stream, ffprobe, sniff_container
@@ -157,6 +159,7 @@ def create_app(
             movie = session.get(Movie, source.movie_id)
             return {
                 "spec": _spec_from(source),
+                "movie_id": source.movie_id,
                 "status": source.status,
                 "mode": source.playback_mode,
                 "container": source.container,
@@ -344,6 +347,30 @@ def create_app(
         await asyncio.to_thread(_set_status, source_id, SourceStatus.PENDING)
         return {"source_id": source_id, "state": "stopped"}
 
+    @app.post("/api/sources/{source_id}/purge", dependencies=[Depends(require_service)])
+    async def purge_source(request: Request, source_id: int) -> dict[str, Any]:
+        """Detiene la descarga y borra sus archivos del disco; conserva el .torrent/magnet."""
+        def run() -> dict[str, Any]:
+            with session_scope(factory) as session:
+                source = session.get(MediaSource, source_id)
+                if source is None:
+                    raise HTTPException(404, "Fuente no encontrada")
+                info_hash = source.info_hash
+            try:
+                result = purge_local_download(engine=_engine(request), settings=settings,
+                                              source_id=source_id, info_hash=info_hash)
+            except PurgeError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            with session_scope(factory) as session:
+                source = session.get(MediaSource, source_id)
+                if source is not None:
+                    source.status = SourceStatus.PENDING
+                    source.file_size = None
+                    source.status_message = "Descarga eliminada del dispositivo"
+            return {"source_id": source_id, "freed_bytes": result.freed_bytes, "removed_dir": result.removed_dir}
+
+        return await asyncio.to_thread(run)
+
     @app.post("/api/sources/{source_id}/probe", dependencies=[Depends(require_service)])
     async def probe_source(request: Request, source_id: int) -> dict[str, Any]:
         try:
@@ -411,6 +438,20 @@ def create_app(
         if mime in ("video/x-matroska",):
             mime = "video/webm"
         quoted = quote(token)
+        claims = verify_token(secret, "play", token)  # ya validado por la dependencia; aquí se leen los datos
+        user_id = int(claims.get("sub", 0))
+        with session_scope(factory) as session:
+            siblings = SourceRepository(session).list_for_movie(info["movie_id"], include_disabled=False)
+            alternatives = [
+                {
+                    "id": s.id,
+                    "label": " · ".join(x for x in (s.label, s.quality, s.audio_language) if x),
+                    "url": f"/player/{s.id}?token={quote(playback_token(secret, user_id=user_id, source_id=s.id, ttl_s=settings.playback_token_ttl_s))}",
+                    "current": s.id == source_id,
+                }
+                for s in siblings
+            ]
+        subtitles = list_subtitles(settings.data_dir / "subtitles", info["movie_id"])
         config = {
             "sourceId": source_id,
             "mode": mode.value,
@@ -419,6 +460,8 @@ def create_app(
             "statusUrl": f"/api/sources/{source_id}/status?token={quoted}",
             "mime": mime,
             "durationS": info["duration_s"],
+            "alternatives": alternatives,
+            "subtitles": subtitles,
         }
         page = player_template.safe_substitute(
             title=html.escape(f"{info['title']} · {info['label']}"),

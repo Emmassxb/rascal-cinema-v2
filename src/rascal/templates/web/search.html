@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Resultados para "{{ q }}"</h1>
+{% if not q %}
+  <p style="color:var(--muted);">Escribe un título, actor, director, productora o usuario en la barra superior.</p>
+{% elif not hits %}
+  <p style="color:var(--muted);">No se encontraron coincidencias.</p>
+{% else %}
+  <div class="panel">
+    {% for h in hits %}
+      {% set href = '/movie/' + h.slug if h.kind == 'movie' else ('/person/' + h.slug if h.kind == 'person' else ('/company/' + h.slug if h.kind == 'company' else ('/genre/' + h.slug if h.kind == 'genre' else '/user/' + h.slug))) %}
+      <div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <span class="badge" style="margin-right:8px;">{{ h.kind }}</span>
+          <a href="{{ href }}" style="font-weight:700;font-size:1rem;">{{ h.title }}</a>
+          {% if h.subtitle %}<span style="color:var(--muted);font-size:0.85rem;margin-left:8px;">{{ h.subtitle }}</span>{% endif %}
+        </div>
+        <a class="btn btn-secondary" href="{{ href }}" style="padding:4px 10px;font-size:0.8rem;">Abrir</a>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+{% endblock %}

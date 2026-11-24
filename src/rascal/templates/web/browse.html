@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% from "macros.html" import movie_grid %}
+{% block content %}
+<h1>Catálogo de Películas</h1>
+<form class="panel form-grid" method="get" action="/browse">
+  <div>
+    <label>Género</label>
+    <select name="genre">
+      <option value="">Todos los géneros</option>
+      {% for g in genres %}
+        <option value="{{ g.slug }}" {{ 'selected' if genre == g.slug else '' }}>{{ g.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>Ordenar por</label>
+    <select name="sort">
+      <option value="popularity" {{ 'selected' if sort == 'popularity' else '' }}>Popularidad</option>
+      <option value="rating" {{ 'selected' if sort == 'rating' else '' }}>Mejor calificación</option>
+      <option value="recent" {{ 'selected' if sort == 'recent' else '' }}>Más recientes</option>
+      <option value="title" {{ 'selected' if sort == 'title' else '' }}>Título (A-Z)</option>
+    </select>
+  </div>
+  <div>
+    <label>Año desde</label>
+    <input type="number" name="year_from" value="{{ year_from }}" placeholder="1980">
+  </div>
+  <div>
+    <label>Año hasta</label>
+    <input type="number" name="year_to" value="{{ year_to }}" placeholder="2026">
+  </div>
+  <div>
+    <label>Estrellas mínimas (0-5)</label>
+    <input type="number" step="0.5" min="0" max="5" name="min_stars" value="{{ min_stars }}" placeholder="3.5">
+  </div>
+  <div style="display:flex;align-items:flex-end;">
+    <button class="btn" type="submit" style="width:100%;">Filtrar</button>
+  </div>
+</form>
+{{ movie_grid(cards) }}
+{% endblock %}

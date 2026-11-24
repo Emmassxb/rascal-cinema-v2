@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "macros.html" import movie_grid %}
+{% block content %}
+<div class="panel" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;">
+  <div>
+    <h1 style="margin-bottom:4px;">Rascal Does Not Dream of Cinema</h1>
+    <p style="margin:0;color:var(--muted);">Reseña, explora filmografías conectadas y reproduce cine vía P2P secuencial.</p>
+  </div>
+  <div style="display:flex;gap:10px;">
+    <a class="btn" href="/browse">Explorar catálogo</a>
+    <a class="btn btn-secondary" href="/partner">Subir / Gestionar películas</a>
+  </div>
+</div>
+
+<h2 class="section-title">Mejor Valoradas</h2>
+{{ movie_grid(feed.top_rated) }}
+
+<h2 class="section-title">Populares en la Comunidad</h2>
+{{ movie_grid(feed.popular) }}
+
+<h2 class="section-title">Añadidas Recientemente</h2>
+{{ movie_grid(feed.recent) }}
+{% endblock %}

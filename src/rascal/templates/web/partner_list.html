@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
+  <div>
+    <h1 style="margin-bottom:2px;">Panel Partner / Administración</h1>
+    <p style="margin:0;color:var(--muted);">Crea películas, edita metadatos, enlaza tráilers de YouTube y sube archivos .torrent o subtítulos.</p>
+  </div>
+  <a class="btn" href="/partner/movie/new">+ Nueva Película</a>
+</div>
+<div class="panel">
+  {% if movies %}
+    <table>
+      <thead><tr><th>ID</th><th>Título</th><th>Año</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <tbody>
+        {% for m in movies %}
+          <tr>
+            <td>#{{ m.id }}</td>
+            <td><a href="/movie/{{ m.slug }}" style="font-weight:700;">{{ m.title }}</a></td>
+            <td>{{ m.release_year or '—' }}</td>
+            <td><span class="badge">{{ 'Publicada' if getattr(m, 'is_published', True) else 'Borrador' }}</span></td>
+            <td style="display:flex;gap:8px;">
+              <a class="btn btn-secondary" href="/partner/movie/{{ m.id }}" style="padding:4px 10px;font-size:0.82rem;">Editar / Torrents / Subs</a>
+              <a class="btn btn-secondary" href="/movie/{{ m.slug }}" style="padding:4px 10px;font-size:0.82rem;">Ver ficha</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:var(--muted);">Aún no hay películas registradas. Haz clic en <strong>+ Nueva Película</strong> para crear la primera.</p>
+  {% endif %}
+</div>
+{% if requests is not none %}
+<h2 class="section-title" style="margin-top:28px;">Solicitudes de Partner ({{ requests|length }})</h2>
+<div class="panel">
+  {% if requests %}
+    <table>
+      <thead><tr><th>Usuario</th><th>Motivo</th><th>Portafolio</th><th>Fecha</th><th>Decisión</th></tr></thead>
+      <tbody>
+        {% for r in requests %}
+          <tr>
+            <td><strong>@{{ r.user.username }}</strong>{% if r.display_name %}<div class="muted small">{{ r.display_name }}</div>{% endif %}</td>
+            <td style="max-width:420px;white-space:pre-wrap;">{{ r.reason }}</td>
+            <td>{% if r.portfolio_url %}<a href="{{ r.portfolio_url }}" target="_blank" rel="noopener">Ver</a>{% else %}—{% endif %}</td>
+            <td class="small">{{ r.created_at.strftime('%d/%m/%Y') }}</td>
+            <td class="actions">
+              <form method="post" action="/partner/requests/{{ r.id }}/approve"><button class="btn btn-sm" type="submit">Aprobar → Partner</button></form>
+              <form method="post" action="/partner/requests/{{ r.id }}/reject"><button class="btn btn-danger btn-sm" type="submit">Rechazar</button></form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No hay solicitudes pendientes.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

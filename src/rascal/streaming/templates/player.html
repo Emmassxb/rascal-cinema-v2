@@ -19,8 +19,9 @@
   .bar strong { color:var(--text); }
   .progress { flex:1 1 160px; height:6px; background:#2c3440; border-radius:3px; overflow:hidden; }
   .progress > div { height:100%; width:0; background:var(--accent); transition:width .5s; }
-  #seek { display:none; gap:6px; align-items:center; }
-  #seek input { width:70px; background:#0f1316; color:var(--text); border:1px solid #2c3440; border-radius:4px; padding:3px 6px; }
+  #seek, #versions-wrap { display:none; gap:6px; align-items:center; }
+  #seek input, #versions { background:#0f1316; color:var(--text); border:1px solid #2c3440; border-radius:4px; padding:3px 6px; }
+  #seek input { width:70px; }
   #seek button { background:var(--accent); color:#000; border:0; border-radius:4px; padding:4px 10px; cursor:pointer; }
   #msg { color:#f5a623; }
 </style>
@@ -33,6 +34,10 @@
     <span id="state">—</span>
     <div class="progress" title="Archivo descargado"><div id="progress"></div></div>
     <span id="rates">—</span>
+    <span id="versions-wrap">
+      <label for="versions">Versión</label>
+      <select id="versions" aria-label="Cambiar de versión, calidad o idioma"></select>
+    </span>
     <form id="seek">
       <span>Ir a</span><input id="seek-input" placeholder="mm:ss" aria-label="Posición mm:ss">
       <button type="submit">Ir</button><span id="clock"></span>
@@ -70,8 +75,34 @@
     el("seek").style.display = usesFfmpeg(cfg.mode) ? "flex" : "none";
   }
 
+  // ── Subtítulos: pistas nativas de Video.js (botón CC de la barra de controles) ──────────
+  // Se registran como remote text tracks; el usuario activa, desactiva o cambia de pista en CC.
+  function loadSubtitles() {
+    (cfg.subtitles || []).forEach(function (s) {
+      player.addRemoteTextTrack({ kind: "subtitles", src: s.url, srclang: s.srclang || "und", label: s.label, default: false }, false);
+    });
+  }
+
+  // ── Selector de versiones (calidad / idioma): otra fuente de la misma película ─────────
+  function loadVersions() {
+    var alts = cfg.alternatives || [];
+    if (alts.length < 2) { return; }
+    var select = el("versions");
+    alts.forEach(function (a) {
+      var opt = document.createElement("option");
+      opt.value = a.url;
+      opt.textContent = a.label || ("Versión " + a.id);
+      opt.selected = !!a.current;
+      select.appendChild(opt);
+    });
+    el("versions-wrap").style.display = "inline-flex";
+    select.addEventListener("change", function () { window.location.href = select.value; });
+  }
+
   setSource(0);
   showSeek();
+  loadSubtitles();
+  loadVersions();
 
   player.on("playing", function () { started = true; el("overlay").classList.add("hidden"); });
   player.on("timeupdate", function () {

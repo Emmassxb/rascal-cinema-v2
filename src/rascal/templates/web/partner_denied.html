@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel">
+  <h2>Acceso restringido a Partner / Admin</h2>
+  <p>Tu cuenta actual (<strong>@{{ viewer.username }}</strong>) tiene el rol <code>user</code>.</p>
+  <p style="color:var(--muted);">Para promover tu usuario a <strong>admin</strong> en desarrollo local, ejecuta en Anaconda Prompt:</p>
+  <pre style="background:#0f1316;padding:12px;border-radius:6px;overflow-x:auto;color:var(--green);">python -c "import sys; sys.path.insert(0,'src'); from rascal.data.db import get_sessionmaker; from rascal.data.models import User; from rascal.data.enums import Role; from sqlalchemy import update; s=get_sessionmaker()(); s.execute(update(User).where(User.username=='{{ viewer.username }}').values(role=Role.ADMIN)); s.commit(); print('Rol actualizado a ADMIN')"</pre>
+</div>
+{% endblock %}
