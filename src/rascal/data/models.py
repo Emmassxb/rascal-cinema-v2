@@ -9,7 +9,9 @@ Esquema relacional normalizado que reemplaza los documentos planos de MongoDB:
 * ``users`` N:M ``movies``      vía ``reviews`` (diario: varias entradas por usuario)
 * ``users`` N:M ``movies``      vía ``watchlist`` y ``favorite_movies``
 * ``users`` N:M ``users``       vía ``follows``
-* ``movies`` 1:N ``media_sources`` (magnet / .torrent)
+* ``movies`` 1:N ``media_sources`` (magnet / .torrent / URL directa / HLS)
+* ``movies`` (series) 1:N ``seasons`` 1:N ``episodes`` 1:N ``media_sources``
+* ``movies`` 1:N ``watch_links`` (plataformas oficiales, "Dónde ver")
 
 Todas las marcas de tiempo se guardan en UTC *naive* para que SQLite y PostgreSQL
 se comporten igual.
@@ -29,6 +31,7 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -43,11 +46,13 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, synonym
 
 from rascal.data.enums import (
     ColorKind,
     CreditRole,
+    MediaType,
+    OfferType,
     PartnerRequestStatus,
     PlaybackMode,
     Role,
@@ -157,9 +162,23 @@ class LoginChallenge(Base):
 # Catálogo
 # ─────────────────────────────────────────────────────────────────────────────
 class Movie(Base):
+    """Título del catálogo: película (``media_type='movie'``) o serie (``'series'``).
+
+    Las series reutilizan esta tabla (ficha, créditos, géneros, reseñas, watchlist y
+    "Dónde ver" funcionan igual) y añaden ``seasons`` → ``episodes``.
+
+    ``rating_avg``…``popularity`` son **agregados desnormalizados** que mantiene
+    ``rascal.data.stats`` en la misma transacción que cada reseña o entrada de watchlist.
+    Los listados (inicio, catálogo, búsqueda, filmografías) ordenan y filtran por estas
+    columnas indexadas en vez de agrupar toda la tabla ``reviews`` en cada petición.
+    """
+
     __tablename__ = "movies"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    media_type: Mapped[MediaType] = mapped_column(
+        _enum(MediaType, "media_type"), default=MediaType.MOVIE, server_default=MediaType.MOVIE.value
+    )
     slug: Mapped[str] = mapped_column(String(120), unique=True)
     title: Mapped[str] = mapped_column(String(300), index=True)
     original_title: Mapped[str | None] = mapped_column(String(300))
@@ -172,12 +191,20 @@ class Movie(Base):
     trailer_url: Mapped[str | None] = mapped_column(String(500))
     trailer_path: Mapped[str | None] = mapped_column(String(500))
     imdb_id: Mapped[str | None] = mapped_column(String(16), unique=True)
-    tmdb_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    # TMDB numera películas y series por separado (movie/1399 ≠ tv/1399): único por (media_type, tmdb_id).
+    tmdb_id: Mapped[int | None] = mapped_column(Integer, index=True)
     legacy_movie_id: Mapped[int | None] = mapped_column(Integer, unique=True)  # movieId de Mongo
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    # Agregados desnormalizados (ver rascal.data.stats). Escala de rating_avg: 1..10.
+    rating_avg: Mapped[float | None] = mapped_column(Float)
+    rating_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    review_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    watchlist_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    popularity: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # reseñas + watchlist
 
     owner: Mapped[User | None] = relationship(back_populates="owned_movies")
     genres: Mapped[list[Genre]] = relationship(secondary=movie_genres, back_populates="movies", order_by="Genre.name")
@@ -197,10 +224,31 @@ class Movie(Base):
     sources: Mapped[list[MediaSource]] = relationship(
         back_populates="movie", cascade="all, delete-orphan", passive_deletes=True
     )
+    seasons: Mapped[list[Season]] = relationship(
+        back_populates="series", cascade="all, delete-orphan", passive_deletes=True,
+        order_by=lambda: Season.season_number,
+    )
+    watch_links: Mapped[list[WatchLink]] = relationship(
+        back_populates="movie", cascade="all, delete-orphan", passive_deletes=True,
+        order_by=lambda: (WatchLink.offer_type, WatchLink.platform_name),
+    )
+
+    @property
+    def is_series(self) -> bool:
+        return self.media_type is MediaType.SERIES
 
     __table_args__ = (
         CheckConstraint("release_year IS NULL OR release_year BETWEEN 1870 AND 2100", name="release_year_range"),
         CheckConstraint("runtime_min IS NULL OR runtime_min > 0", name="runtime_positive"),
+        UniqueConstraint("media_type", "tmdb_id", name="uq_movies_media_type_tmdb_id"),
+        # Listados: filtro por tipo + publicadas + año (catálogo, filmografías con rango de años).
+        Index("ix_movies_type_published_year", "media_type", "is_published", "release_year"),
+        # Ordenaciones del inicio/catálogo sin agrupar reseñas: top-N por índice.
+        Index("ix_movies_published_popularity", "is_published", "popularity"),
+        Index("ix_movies_published_rating", "is_published", "rating_avg"),
+        Index("ix_movies_published_created", "is_published", "created_at"),
+        # Orden alfabético paginado (catálogo «Título A-Z») sin ordenar en memoria.
+        Index("ix_movies_published_title", "is_published", "title", "id"),
     )
 
 
@@ -259,8 +307,14 @@ class Person(Base):
     birth_date: Mapped[date | None] = mapped_column(Date)
     death_date: Mapped[date | None] = mapped_column(Date)
     photo_path: Mapped[str | None] = mapped_column(String(500))
+    place_of_birth: Mapped[str | None] = mapped_column(String(200))
+    known_for_department: Mapped[str | None] = mapped_column(String(64))  # "Acting", "Directing"…
     tmdb_id: Mapped[int | None] = mapped_column(Integer, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, onupdate=utcnow)
+
+    # Alias explícito pedido por la API de TMDB (/person/{id}); comparte la columna tmdb_id.
+    tmdb_person_id = synonym("tmdb_id")
 
     credits: Mapped[list[MovieCredit]] = relationship(back_populates="person", passive_deletes=True)
 
@@ -364,22 +418,34 @@ class Follow(Base):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Fuentes P2P
+# Fuentes de reproducción (P2P y directas)
 # ─────────────────────────────────────────────────────────────────────────────
 class MediaSource(Base):
-    """Fuente de video P2P vinculada a una película (magnet o archivo .torrent)."""
+    """Fuente de reproducción de una película o de un capítulo.
+
+    * P2P: ``magnet`` (``magnet_uri``) o ``torrent_file`` (``torrent_data``) con ``info_hash``.
+    * Directa: ``direct_url`` (MP4/WebM/MKV por HTTPS) o ``hls`` (.m3u8) con ``stream_url``.
+      No pasa por libtorrent: el navegador la reproduce tal cual.
+
+    ``movie_id`` siempre apunta al título (la serie, en el caso de un capítulo) y
+    ``episode_id`` concreta el capítulo. Así las consultas por título siguen siendo baratas
+    y el borrado en cascada de una serie arrastra todas sus fuentes.
+    """
 
     __tablename__ = "media_sources"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     movie_id: Mapped[int] = mapped_column(ForeignKey("movies.id", ondelete="CASCADE"), index=True)
+    episode_id: Mapped[int | None] = mapped_column(ForeignKey("episodes.id", ondelete="CASCADE"), index=True)
     kind: Mapped[SourceKind] = mapped_column(_enum(SourceKind, "source_kind"))
     label: Mapped[str] = mapped_column(String(120), default="Principal")
     audio_language: Mapped[str | None] = mapped_column(String(40))  # "Español Latino", "Japonés (VO)"
     quality: Mapped[str | None] = mapped_column(String(20))  # "1080p", "720p", "4K"
     magnet_uri: Mapped[str | None] = mapped_column(Text)
     torrent_data: Mapped[bytes | None] = mapped_column(LargeBinary)
-    info_hash: Mapped[str] = mapped_column(String(64), index=True)  # v1 (40 hex) o v2 (64 hex)
+    info_hash: Mapped[str | None] = mapped_column(String(64), index=True)  # v1 (40 hex) o v2 (64 hex); NULL si es URL
+    stream_url: Mapped[str | None] = mapped_column(Text)  # direct_url / hls
+    url_hash: Mapped[str | None] = mapped_column(String(64))  # sha256(stream_url): evita duplicados
     display_name: Mapped[str | None] = mapped_column(String(500))
     total_size: Mapped[int | None] = mapped_column(BigInteger)
     file_index: Mapped[int | None] = mapped_column(Integer)
@@ -402,13 +468,103 @@ class MediaSource(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     movie: Mapped[Movie] = relationship(back_populates="sources")
+    episode: Mapped[Episode | None] = relationship(back_populates="sources")
+
+    @property
+    def source_type(self) -> str:
+        """torrent | magnet | direct_url | hls (nomenclatura estilo Stremio)."""
+        return self.kind.source_type
+
+    @property
+    def is_p2p(self) -> bool:
+        return self.kind.is_p2p
 
     __table_args__ = (
         UniqueConstraint("movie_id", "info_hash", name="uq_media_sources_movie_info_hash"),
+        UniqueConstraint("movie_id", "url_hash", name="uq_media_sources_movie_url_hash"),
         CheckConstraint(
-            "(kind = 'magnet' AND magnet_uri IS NOT NULL) OR (kind = 'torrent_file' AND torrent_data IS NOT NULL)",
+            "(kind = 'magnet' AND magnet_uri IS NOT NULL AND info_hash IS NOT NULL)"
+            " OR (kind = 'torrent_file' AND torrent_data IS NOT NULL AND info_hash IS NOT NULL)"
+            " OR (kind IN ('direct_url', 'hls') AND stream_url IS NOT NULL AND url_hash IS NOT NULL)",
             name="payload_matches_kind",
         ),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Series: temporadas y capítulos
+# ─────────────────────────────────────────────────────────────────────────────
+class Season(Base):
+    __tablename__ = "seasons"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    series_id: Mapped[int] = mapped_column(ForeignKey("movies.id", ondelete="CASCADE"))
+    season_number: Mapped[int] = mapped_column(SmallInteger)  # 0 = especiales (convención TMDB)
+    title: Mapped[str | None] = mapped_column(String(300))
+    overview: Mapped[str | None] = mapped_column(Text)
+    poster_path: Mapped[str | None] = mapped_column(String(500))
+    air_year: Mapped[int | None] = mapped_column(SmallInteger)
+    tmdb_season_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, server_default=func.now())
+
+    series: Mapped[Movie] = relationship(back_populates="seasons")
+    episodes: Mapped[list[Episode]] = relationship(
+        back_populates="season", cascade="all, delete-orphan", passive_deletes=True,
+        order_by=lambda: Episode.episode_number,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("series_id", "season_number", name="uq_seasons_series_number"),
+        CheckConstraint("season_number BETWEEN 0 AND 999", name="season_number_range"),
+        CheckConstraint("air_year IS NULL OR air_year BETWEEN 1870 AND 2100", name="air_year_range"),
+    )
+
+
+class Episode(Base):
+    __tablename__ = "episodes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id", ondelete="CASCADE"))
+    episode_number: Mapped[int] = mapped_column(SmallInteger)
+    title: Mapped[str | None] = mapped_column(String(300))
+    synopsis: Mapped[str | None] = mapped_column(Text)
+    runtime_min: Mapped[int | None] = mapped_column(SmallInteger)
+    still_path: Mapped[str | None] = mapped_column(String(500))
+    air_date: Mapped[date | None] = mapped_column(Date)
+    tmdb_episode_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, server_default=func.now())
+
+    season: Mapped[Season] = relationship(back_populates="episodes")
+    sources: Mapped[list[MediaSource]] = relationship(back_populates="episode", passive_deletes=True)
+
+    __table_args__ = (
+        UniqueConstraint("season_id", "episode_number", name="uq_episodes_season_number"),
+        CheckConstraint("episode_number BETWEEN 0 AND 9999", name="episode_number_range"),
+        CheckConstraint("runtime_min IS NULL OR runtime_min > 0", name="episode_runtime_positive"),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Plataformas oficiales ("Dónde ver")
+# ─────────────────────────────────────────────────────────────────────────────
+class WatchLink(Base):
+    __tablename__ = "watch_links"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    movie_id: Mapped[int] = mapped_column(ForeignKey("movies.id", ondelete="CASCADE"), index=True)
+    platform_name: Mapped[str] = mapped_column(String(80))
+    platform_slug: Mapped[str] = mapped_column(String(80))
+    url: Mapped[str] = mapped_column(String(1000))
+    offer_type: Mapped[OfferType] = mapped_column(_enum(OfferType, "offer_type"), default=OfferType.SUBSCRIPTION)
+    region: Mapped[str] = mapped_column(String(2), default="MX")
+    logo_path: Mapped[str | None] = mapped_column(String(500))
+    added_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, server_default=func.now())
+
+    movie: Mapped[Movie] = relationship(back_populates="watch_links")
+
+    __table_args__ = (
+        UniqueConstraint("movie_id", "platform_slug", "offer_type", "region", name="uq_watch_links_offer"),
     )
 
 

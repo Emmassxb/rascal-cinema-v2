@@ -173,8 +173,14 @@ class ReviewRepository:
 
     # ── Rankings ─────────────────────────────────────────────────────────────
     def global_mean(self) -> float | None:
-        value = self.session.scalar(select(func.avg(Review.rating)).where(Review.rating.is_not(None)))
-        return float(value) if value is not None else None
+        """Media de todas las calificaciones, a partir de los agregados de ``movies``
+        (Σ media·n / Σ n): recorre los títulos con reseñas, no toda la tabla ``reviews``."""
+        total, weight = self.session.execute(
+            select(func.sum(Movie.rating_avg * Movie.rating_count), func.sum(Movie.rating_count)).where(
+                Movie.rating_count > 0
+            )
+        ).one()
+        return float(total) / float(weight) if weight else None
 
     def popular_among_followed(self, follower_id: int, limit: int) -> list[tuple[int, int]]:
         """(movie_id, nº de reseñas de cuentas seguidas) — "Popular entre tus seguidos"."""

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="margin-bottom:14px;"><a href="/partner/movie/{{ series.id }}#temporadas">← {{ series.title }}: temporadas</a>
+  · <a href="/movie/{{ series.slug }}?season={{ season.season_number }}&amp;episode={{ episode.id }}#p2p">Ver en la ficha pública</a></div>
+<datalist id="audio-options">{% for a in audio_suggestions %}<option value="{{ a }}">{% endfor %}</datalist>
+<datalist id="quality-options">{% for q in quality_suggestions %}<option value="{{ q }}">{% endfor %}</datalist>
+
+<form class="panel" method="post" action="/partner/episode/{{ episode.id }}">
+  <h2>{{ series.title }} · T{{ season.season_number }} · Capítulo {{ episode.episode_number }}</h2>
+  <div class="form-grid">
+    <div><label>Nº de capítulo *</label><input type="number" name="episode_number" min="0" value="{{ episode.episode_number }}" required></div>
+    <div><label>Título</label><input type="text" name="title" value="{{ episode.title or '' }}"></div>
+    <div><label>Duración (min)</label><input type="number" name="runtime_min" min="1" value="{{ episode.runtime_min or '' }}"></div>
+    <div><label>Fecha de emisión</label><input type="date" name="air_date" value="{{ episode.air_date.isoformat() if episode.air_date else '' }}"></div>
+    <div style="grid-column:1/-1;"><label>Miniatura (URL)</label><input type="text" name="still_path" value="{{ episode.still_path or '' }}" placeholder="https://image.tmdb.org/t/p/w300/…"></div>
+  </div>
+  <label>Sinopsis</label>
+  <textarea name="synopsis">{{ episode.synopsis or '' }}</textarea>
+  <button class="btn" type="submit" style="margin-top:12px;">Guardar capítulo</button>
+</form>
+
+<div class="panel">
+  <h2>Subtítulos del capítulo</h2>
+  {% if subtitles %}
+    <div style="margin-bottom:12px;">{% for sub in subtitles %}<span class="pill">💬 {{ sub.label }}</span>{% endfor %}</div>
+  {% else %}
+    <p class="muted">Sin subtítulos.</p>
+  {% endif %}
+  <form method="post" action="/partner/episode/{{ episode.id }}/upload-subtitle" enctype="multipart/form-data" class="form-grid"
+        style="background:var(--surface-2);padding:14px;border-radius:8px;">
+    <div><label>Archivo (.srt o .vtt) *</label><input type="file" name="subtitle_file" accept=".srt,.vtt,text/vtt" required></div>
+    <div><label>Idioma / etiqueta</label><input type="text" name="subtitle_label" value="Español" required></div>
+    <div style="display:flex;align-items:flex-end;"><button class="btn btn-secondary" type="submit" style="width:100%;">Subir subtítulo</button></div>
+  </form>
+</div>
+
+<div class="panel" id="fuentes">
+  <h2>Fuentes del capítulo</h2>
+  {% set source_movie_id = series.id %}
+  {% set action_base = '/partner/episode/' ~ episode.id %}
+  {% set return_to = '/partner/episode/' ~ episode.id %}
+  {% include "partials/sources_admin.html" %}
+</div>
+
+<form method="post" action="/partner/episode/{{ episode.id }}/delete" data-confirm="¿Eliminar este capítulo con sus fuentes?">
+  <button class="btn btn-danger" type="submit">Eliminar capítulo</button>
+</form>
+{% endblock %}

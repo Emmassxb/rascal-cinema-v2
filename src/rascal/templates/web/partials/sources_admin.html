@@ -1,0 +1,103 @@
+{# Tabla y formularios de fuentes. Requiere: sources, source_movie_id, action_base, return_to. #}
+{% set source_movie_id = source_movie_id if source_movie_id is defined else movie_id %}
+{% set action_base = action_base if action_base is defined else '/partner/movie/' ~ movie_id %}
+{% if sources %}
+  <div class="table-responsive"><table>
+    <thead><tr><th>Etiqueta</th><th>Tipo</th><th>Idioma / Calidad</th><th>Origen</th><th>Códecs / Modo</th><th>Estado</th><th>Acción</th></tr></thead>
+    <tbody>
+      {% for s in sources %}
+        <tr>
+          <td><strong>{{ s.label }}</strong></td>
+          <td><span class="source-type type-{{ s.source_type }}">{{ {'torrent': 'P2P .torrent', 'magnet': 'P2P magnet', 'direct_url': 'Directo', 'hls': 'HLS'}[s.source_type] }}</span></td>
+          <td>
+            <form method="post" action="/partner/source/{{ s.id }}/update" style="display:grid;gap:4px;min-width:170px;">
+              <input type="hidden" name="movie_id" value="{{ source_movie_id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <input type="text" name="audio_language" list="audio-options" value="{{ s.audio_language or '' }}" placeholder="Idioma" style="padding:4px 6px;">
+              <input type="text" name="quality" list="quality-options" value="{{ s.quality or '' }}" placeholder="Calidad" style="padding:4px 6px;">
+              <button class="btn btn-secondary btn-sm" type="submit">Guardar</button>
+            </form>
+          </td>
+          <td class="small" style="max-width:280px;word-break:break-all;">
+            {% if s.is_p2p %}{{ s.file_path or s.display_name or s.info_hash }}<br><span class="muted">{{ s.info_hash }}</span>
+            {% else %}{{ s.display_name or '' }}<br><span class="muted">{{ s.stream_url }}</span>{% endif %}
+          </td>
+          <td>{{ s.container or '?' }}{% if s.is_p2p %} · {{ s.video_codec or '?' }}/{{ s.audio_codec or '?' }}{% endif %} · <span class="badge">{{ s.playback_mode.value }}</span></td>
+          <td>{{ s.status.value }}{% if s.status_message %}<br><small class="muted">{{ s.status_message }}</small>{% endif %}
+            <form method="post" action="/partner/source/{{ s.id }}/update" style="margin-top:4px;">
+              <input type="hidden" name="movie_id" value="{{ source_movie_id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <input type="hidden" name="audio_language" value="{{ s.audio_language or '' }}">
+              <input type="hidden" name="quality" value="{{ s.quality or '' }}">
+              <input type="hidden" name="enabled" value="{{ '1' if s.status.value == 'disabled' else '0' }}">
+              <button class="btn btn-secondary btn-sm" type="submit">{{ 'Activar' if s.status.value == 'disabled' else 'Desactivar' }}</button>
+            </form>
+          </td>
+          <td>
+            <form method="post" action="/partner/source/{{ s.id }}/delete" data-confirm="¿Eliminar la fuente «{{ s.label }}»?">
+              <input type="hidden" name="movie_id" value="{{ source_movie_id }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <button class="btn btn-danger btn-sm" type="submit">Eliminar</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+{% else %}
+  <p class="muted">Todavía no hay fuentes.</p>
+{% endif %}
+
+<div class="form-grid" style="margin-top:18px;">
+  <form method="post" action="{{ action_base }}/add-direct" style="background:var(--surface-2);padding:14px;border-radius:8px;">
+    <h3 style="font-size:1rem;">Enlace directo o HLS</h3>
+    <p class="muted small">MP4/WebM/MKV por HTTPS, enlaces Debrid o listas .m3u8. Se reproduce en el navegador, sin P2P. Las listas HLS de otro dominio necesitan CORS.</p>
+    <label>URL *</label>
+    <input type="url" name="stream_url" placeholder="https://cdn.ejemplo.com/pelicula-1080p.mp4" required>
+    <label>Tipo</label>
+    <select name="source_type">
+      <option value="auto">Detectar por la extensión</option>
+      <option value="direct_url">Archivo de video (MP4/WebM/MKV)</option>
+      <option value="hls">HLS (.m3u8)</option>
+    </select>
+    <label>Etiqueta</label>
+    <input type="text" name="label" value="Enlace directo 1080p" required>
+    <label>Idioma de audio</label>
+    <input type="text" name="audio_language" list="audio-options" placeholder="Español Latino">
+    <label>Calidad</label>
+    <input type="text" name="quality" list="quality-options" placeholder="1080p">
+    <label>Declaración de derechos / licencia *</label>
+    <input type="text" name="rights_statement" value="Distribución autorizada / Dominio público" required>
+    <button class="btn" type="submit" style="margin-top:10px;">Añadir enlace</button>
+  </form>
+
+  <form method="post" action="{{ action_base }}/upload-torrent" enctype="multipart/form-data" style="background:var(--surface-2);padding:14px;border-radius:8px;">
+    <h3 style="font-size:1rem;">Subir archivo .torrent</h3>
+    <label>Archivo .torrent *</label>
+    <input type="file" name="torrent_file" accept=".torrent,application/x-bittorrent" required>
+    <label>Etiqueta de fuente</label>
+    <input type="text" name="label" value="1080p Principal" required>
+    <label>Idioma de audio</label>
+    <input type="text" name="audio_language" list="audio-options" placeholder="Español Latino">
+    <label>Calidad</label>
+    <input type="text" name="quality" list="quality-options" placeholder="1080p">
+    <label>Declaración de derechos / licencia *</label>
+    <input type="text" name="rights_statement" value="Distribución autorizada / Dominio público" required>
+    <button class="btn" type="submit" style="margin-top:10px;">Subir .torrent</button>
+  </form>
+
+  <form method="post" action="{{ action_base }}/add-magnet" style="background:var(--surface-2);padding:14px;border-radius:8px;">
+    <h3 style="font-size:1rem;">Añadir enlace magnet</h3>
+    <label>Magnet URI *</label>
+    <input type="text" name="magnet_uri" placeholder="magnet:?xt=urn:btih:..." required>
+    <label>Etiqueta de fuente</label>
+    <input type="text" name="label" value="1080p Magnet" required>
+    <label>Idioma de audio</label>
+    <input type="text" name="audio_language" list="audio-options" placeholder="Español Latino">
+    <label>Calidad</label>
+    <input type="text" name="quality" list="quality-options" placeholder="1080p">
+    <label>Declaración de derechos / licencia *</label>
+    <input type="text" name="rights_statement" value="Distribución autorizada / Dominio público" required>
+    <button class="btn btn-secondary" type="submit" style="margin-top:10px;">Añadir magnet</button>
+  </form>
+</div>

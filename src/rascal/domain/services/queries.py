@@ -7,18 +7,22 @@ Cada método devuelve DTOs inmutables listos para ``st.cache_data``. Las vistas 
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from rascal.auth.rbac import Principal, can_edit_movie, can_manage_sources
-from rascal.data.enums import CreditRole, SourceStatus
+from rascal.data.enums import CreditRole, MediaType, SourceStatus
 from rascal.data.models import Company, Genre, Movie, MovieCredit, Person
 from rascal.data.repositories.catalog import CardQuery, CatalogRepository, MovieCardRow
 from rascal.data.repositories.reviews import ReviewRepository, ReviewRow
 from rascal.data.repositories.users import SocialRepository, UserRepository
 from rascal.domain.metrics import entity_metrics, movie_rating_summary
+from rascal.domain.services.people import can_edit_person
+from rascal.domain.services.series import SeriesQueries
+from rascal.domain.services.watch import list_watch_links
 from rascal.domain.ratings import star_label, to_stars
 from rascal.domain.schemas import (
     CreditView,
@@ -37,6 +41,9 @@ from rascal.domain.schemas import (
     UserRef,
 )
 
+GLOBAL_MEAN_TTL_S = 300
+_GLOBAL_MEAN_CACHE: dict[str, tuple[float, float]] = {}
+
 SearchKind = str  # "movies" | "directors" | "cast" | "people" | "companies" | "genres" | "users"
 
 
@@ -53,6 +60,7 @@ def card_from_row(row: MovieCardRow, roles: list[tuple[CreditRole, str | None]] 
         id=row.id,
         slug=row.slug,
         title=row.title,
+        media_type=row.media_type,
         release_year=row.release_year,
         poster_path=row.poster_path,
         average=row.average,
@@ -131,14 +139,10 @@ class CatalogQueries:
             for c in sorted(movie.credits, key=lambda c: (list(CreditRole).index(c.role), c.billing_order))
             if c.role not in (CreditRole.CAST, CreditRole.DIRECTOR)
         ]
-        show_all_sources = can_manage_sources(self.viewer, movie.owner_id)
-        sources = [
-            SourceView.model_validate(s, from_attributes=True)
-            for s in movie.sources
-            if show_all_sources or s.status is not SourceStatus.DISABLED
-        ]
+        sources = self.title_sources(movie.id, movie.owner_id)
         return MovieDetail(
             id=movie.id,
+            media_type=movie.media_type,
             slug=movie.slug,
             title=movie.title,
             original_title=movie.original_title,
@@ -162,8 +166,19 @@ class CatalogQueries:
             tech=TechSpecsView.model_validate(movie.tech_specs, from_attributes=True) if movie.tech_specs else None,
             sources=sources,
             rating=movie_rating_summary(self.session, movie.id),
-            watchlist_count=self.social.watchlist_count_for_movie(movie.id),
+            watchlist_count=movie.watchlist_count,
+            watch_links=list_watch_links(self.session, movie.id),
+            seasons=SeriesQueries(self.session).seasons(movie.id) if movie.media_type is MediaType.SERIES else [],
         )
+
+    def title_sources(self, movie_id: int, owner_id: int | None, *, episode_id: int | None = None) -> list[SourceView]:
+        """Fuentes visibles para el espectador (las desactivadas, sólo para quien las gestiona)."""
+        show_all = can_manage_sources(self.viewer, owner_id)
+        return [
+            SourceView.model_validate(s, from_attributes=True)
+            for s in self.catalog.title_sources(movie_id, episode_id=episode_id)
+            if show_all or s.status is not SourceStatus.DISABLED
+        ]
 
     def movie_reviews(self, movie_id: int, *, order: str = "recent", limit: int = 50, offset: int = 0) -> list[ReviewView]:
         return [review_view(r) for r in self.reviews.list_for_movie(movie_id, order=order, limit=limit, offset=offset)]
@@ -214,6 +229,10 @@ class CatalogQueries:
             country=getattr(entity, "country", None),
             birth_date=getattr(entity, "birth_date", None),
             death_date=getattr(entity, "death_date", None),
+            place_of_birth=getattr(entity, "place_of_birth", None),
+            known_for_department=getattr(entity, "known_for_department", None),
+            tmdb_id=getattr(entity, "tmdb_id", None),
+            can_edit=isinstance(entity, Person) and can_edit_person(self.session, self.viewer, entity.id),
             roles=[RoleCount(role=r, films=n) for r, n in self.catalog.person_role_counts(entity.id)]
             if isinstance(entity, Person)
             else [],
@@ -222,10 +241,10 @@ class CatalogQueries:
 
     # ── Home ─────────────────────────────────────────────────────────────────
     def home(self, *, limit: int = 12) -> HomeFeed:
-        prior = self.reviews.global_mean() or 6.0
-        top, _ = self.catalog.movie_cards(CardQuery(sort="weighted", prior_mean=prior, limit=limit))
-        popular, _ = self.catalog.movie_cards(CardQuery(sort="popularity", limit=limit))
-        recent, _ = self.catalog.movie_cards(CardQuery(sort="recent", limit=limit))
+        prior = self._cached_global_mean()
+        top, _ = self.catalog.movie_cards(CardQuery(sort="weighted", prior_mean=prior, limit=limit, with_total=False))
+        popular, _ = self.catalog.movie_cards(CardQuery(sort="popularity", limit=limit, with_total=False))
+        recent, _ = self.catalog.movie_cards(CardQuery(sort="recent", limit=limit, with_total=False))
         followed: list[MovieCard] = []
         if self.viewer is not None:
             ranked = self.reviews.popular_among_followed(self.viewer.user_id, limit)
@@ -243,9 +262,23 @@ class CatalogQueries:
             popular_among_followed=followed,
         )
 
-    def browse(self, filters: FilmographyFilters, *, title: str | None = None) -> tuple[list[MovieCard], int]:
+    def _cached_global_mean(self) -> float:
+        """Media global de calificaciones (prior bayesiano del «Top»), cacheada 5 min por base de datos:
+        cambia muy despacio y calcularla recorre todos los títulos con reseñas."""
+        key = str(self.session.get_bind().url)
+        hit = _GLOBAL_MEAN_CACHE.get(key)
+        now = time.monotonic()
+        if hit is None or now - hit[1] > GLOBAL_MEAN_TTL_S:
+            hit = (self.reviews.global_mean() or 6.0, now)
+            _GLOBAL_MEAN_CACHE[key] = hit
+        return hit[0]
+
+    def browse(
+        self, filters: FilmographyFilters, *, title: str | None = None, media_type: MediaType | None = None
+    ) -> tuple[list[MovieCard], int]:
         rows, total = self.catalog.movie_cards(
             CardQuery(
+                media_type=media_type,
                 genre_slug=filters.genre_slug,
                 year_from=filters.year_from,
                 year_to=filters.year_to,
@@ -268,27 +301,27 @@ class CatalogQueries:
             return []
         if kind == "movies":
             return [
-                SearchHit(kind="movie", id=m.id, slug=m.slug, title=m.title,
-                          subtitle=str(m.release_year) if m.release_year else None, image_path=m.poster_path)
+                SearchHit(kind="series" if m.media_type is MediaType.SERIES else "movie", id=m.id, slug=m.slug,
+                          title=m.name, subtitle=str(m.year) if m.year else None, image_path=m.image_path)
                 for m in self.catalog.search_movies(q, limit)
             ]
         if kind in ("directors", "cast", "people"):
             role = {"directors": CreditRole.DIRECTOR, "cast": CreditRole.CAST}.get(kind)
             return [
-                SearchHit(kind="person", id=p.id, slug=p.slug, title=p.name, subtitle=f"{n} películas",
-                          image_path=p.photo_path)
-                for p, n in self.catalog.search_people(q, limit, role)
+                SearchHit(kind="person", id=p.id, slug=p.slug, title=p.name, subtitle=f"{p.films} títulos",
+                          image_path=p.image_path)
+                for p in self.catalog.search_people(q, limit, role)
             ]
         if kind == "companies":
             return [
-                SearchHit(kind="company", id=c.id, slug=c.slug, title=c.name, subtitle=f"{n} películas",
-                          image_path=c.logo_path)
-                for c, n in self.catalog.search_companies(q, limit)
+                SearchHit(kind="company", id=c.id, slug=c.slug, title=c.name, subtitle=f"{c.films} títulos",
+                          image_path=c.image_path)
+                for c in self.catalog.search_companies(q, limit)
             ]
         if kind == "genres":
             return [
-                SearchHit(kind="genre", id=g.id, slug=g.slug, title=g.name, subtitle=f"{n} películas")
-                for g, n in self.catalog.search_genres(q, limit)
+                SearchHit(kind="genre", id=g.id, slug=g.slug, title=g.name, subtitle=f"{g.films} títulos")
+                for g in self.catalog.search_genres(q, limit)
             ]
         if kind == "users":
             return [

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rascal-cinema"
-version = "2.0.0"
+version = "2.2.0"
 description = "Rascal Does Not Dream of Cinema — reseñas, analítica y streaming P2P estilo Letterboxd"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -18,7 +18,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "rascal.streaming" = ["templates/*.html"]
-"rascal" = ["templates/web/*.html"]
+"rascal" = ["templates/web/*.html", "templates/web/partials/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

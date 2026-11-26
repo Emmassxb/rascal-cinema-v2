@@ -29,12 +29,28 @@ from pydantic import (
 from rascal.data.enums import (
     ColorKind,
     CreditRole,
+    MediaType,
+    OfferType,
     PartnerRequestStatus,
     PlaybackMode,
     Role,
     SourceKind,
     SourceStatus,
 )
+from rascal.security.urls import UnsafeUrl, validate_external_url
+
+
+def _allow_private_urls() -> bool:
+    from rascal.config import get_settings  # import diferido: evita ciclos y respeta .env
+
+    return get_settings().allow_private_urls
+
+
+def _external(value: str, *, schemes: tuple[str, ...] = ("https", "http"), max_length: int = 500) -> str:
+    try:
+        return validate_external_url(value, schemes=schemes, allow_private=_allow_private_urls(), max_length=max_length)
+    except UnsafeUrl as exc:
+        raise ValueError(str(exc)) from exc
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tipos reutilizables
@@ -61,11 +77,9 @@ def _validate_media_ref(value: str | None) -> str | None:
     if len(value) > 500:
         raise ValueError("La ruta/URL no puede superar 500 caracteres")
     parsed = urlparse(value)
-    if parsed.scheme in ("http", "https"):
-        if not parsed.netloc:
-            raise ValueError("URL inválida")
-        return value
-    if parsed.scheme:
+    if parsed.scheme.lower() in ("http", "https"):
+        return _external(value)
+    if parsed.scheme or value.startswith("//"):
         raise ValueError("Sólo se admiten URLs http(s) o rutas relativas")
     if value.startswith(("/", "\\")) or ".." in value.replace("\\", "/").split("/"):
         raise ValueError("Ruta relativa inválida")
@@ -79,12 +93,9 @@ def _validate_http_url(value: str | None) -> str | None:
     value = _empty_to_none(value)
     if value is None:
         return None
-    parsed = urlparse(value)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError("Debe ser una URL http(s)")
     if len(value) > 500:
         raise ValueError("URL demasiado larga")
-    return value
+    return _external(value)
 
 
 HttpUrlStr = Annotated[str | None, AfterValidator(_validate_http_url)]
@@ -159,12 +170,14 @@ class MovieCard(_Frozen):
     id: int
     slug: str
     title: str
+    media_type: MediaType = MediaType.MOVIE
     release_year: int | None = None
     poster_path: str | None = None
     average: float | None = None
     average_stars: float | None = None
     review_count: int = 0
     watchlist_count: int = 0
+    is_published: bool = True
     roles: list[CreditRole] = Field(default_factory=list)  # filmografía de personas
     characters: list[str] = Field(default_factory=list)
 
@@ -183,11 +196,15 @@ class TechSpecsView(_Frozen):
 class SourceView(_Frozen):
     id: int
     movie_id: int
+    episode_id: int | None = None
     kind: SourceKind
+    source_type: str = "magnet"  # torrent | magnet | direct_url | hls
+    is_p2p: bool = True
     label: str
     audio_language: str | None = None
     quality: str | None = None
-    info_hash: str
+    info_hash: str | None = None
+    stream_url: str | None = None  # sólo se muestra en el panel Partner
     display_name: str | None = None
     file_path: str | None = None
     file_size: int | None = None
@@ -203,8 +220,68 @@ class SourceView(_Frozen):
     created_at: datetime
 
 
+class WatchLinkView(_Frozen):
+    id: int
+    platform_name: str
+    platform_slug: str
+    url: str
+    offer_type: OfferType
+    region: str
+    logo_path: str | None = None
+
+    @property
+    def offer_label(self) -> str:
+        return OFFER_LABELS.get(self.offer_type, self.offer_type.value)
+
+
+OFFER_LABELS = {
+    OfferType.SUBSCRIPTION: "Suscripción",
+    OfferType.RENT: "Renta",
+    OfferType.BUY: "Compra",
+    OfferType.FREE: "Gratis",
+}
+
+
+class SeasonView(_Frozen):
+    id: int
+    season_number: int
+    title: str | None = None
+    overview: str | None = None
+    poster_path: str | None = None
+    air_year: int | None = None
+    episode_count: int = 0
+
+    @property
+    def display_title(self) -> str:
+        if self.title:
+            return self.title
+        return "Especiales" if self.season_number == 0 else f"Temporada {self.season_number}"
+
+
+class EpisodeView(_Frozen):
+    id: int
+    season_id: int
+    season_number: int
+    episode_number: int
+    title: str | None = None
+    synopsis: str | None = None
+    runtime_min: int | None = None
+    still_path: str | None = None
+    air_date: date | None = None
+    source_count: int = 0
+
+    @property
+    def code(self) -> str:
+        return f"T{self.season_number}·E{self.episode_number}"
+
+    @property
+    def display_title(self) -> str:
+        return self.title or f"Capítulo {self.episode_number}"
+
+
 class MovieDetail(_Frozen):
     id: int
+    media_type: MediaType = MediaType.MOVIE
     slug: str
     title: str
     original_title: str | None = None
@@ -229,6 +306,12 @@ class MovieDetail(_Frozen):
     sources: list[SourceView]
     rating: RatingSummary
     watchlist_count: int = 0
+    watch_links: list[WatchLinkView] = Field(default_factory=list)
+    seasons: list[SeasonView] = Field(default_factory=list)
+
+    @property
+    def is_series(self) -> bool:
+        return self.media_type is MediaType.SERIES
 
 
 class ReviewView(_Frozen):
@@ -274,6 +357,10 @@ class EntityProfile(_Frozen):
     country: str | None = None
     birth_date: date | None = None
     death_date: date | None = None
+    place_of_birth: str | None = None
+    known_for_department: str | None = None
+    tmdb_id: int | None = None
+    can_edit: bool = False
     roles: list[RoleCount] = Field(default_factory=list)
     metrics: EntityMetrics
     filmography: list[MovieCard]
@@ -333,7 +420,7 @@ class PartnerRequestView(_Frozen):
 
 
 class SearchHit(_Frozen):
-    kind: Literal["movie", "person", "company", "genre", "user"]
+    kind: Literal["movie", "series", "person", "company", "genre", "user"]
     id: int
     slug: str
     title: str
@@ -462,6 +549,7 @@ class MovieForm(BaseModel):
     imdb_id: OptionalText = None
     tmdb_id: int | None = Field(default=None, gt=0)
     is_published: bool = True
+    media_type: MediaType = MediaType.MOVIE
 
     genres: list[Name] = Field(default_factory=list, max_length=12)
     companies: list[Name] = Field(default_factory=list, max_length=40)
@@ -566,6 +654,119 @@ class TorrentSourceForm(BaseModel):
     audio_language: AudioLanguage = None
     quality: Quality = None
     rights_statement: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)]
+
+
+Label = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+Rights = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)]
+
+
+class DirectSourceForm(BaseModel):
+    """Enlace directo (MP4/WebM/MKV por HTTPS, Debrid) o lista HLS (.m3u8)."""
+
+    stream_url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=4000)]
+    source_type: Literal["auto", "direct_url", "hls"] = "auto"
+    label: Label = "Enlace directo"
+    audio_language: AudioLanguage = None
+    quality: Quality = None
+    rights_statement: Rights
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Series: temporadas y capítulos
+# ─────────────────────────────────────────────────────────────────────────────
+class SeasonForm(BaseModel):
+    season_number: int = Field(ge=0, le=999)
+    title: OptionalText = None
+    overview: OptionalText = None
+    poster_path: MediaRef = None
+    air_year: int | None = Field(default=None, ge=1870, le=2100)
+
+    @field_validator("title")
+    @classmethod
+    def _title_len(cls, value: str | None) -> str | None:
+        if value is not None and len(value) > 300:
+            raise ValueError("Máximo 300 caracteres")
+        return value
+
+
+class EpisodeForm(BaseModel):
+    episode_number: int = Field(ge=0, le=9999)
+    title: OptionalText = None
+    synopsis: OptionalText = None
+    runtime_min: int | None = Field(default=None, ge=1, le=1000)
+    still_path: MediaRef = None
+    air_date: date | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _title_len(cls, value: str | None) -> str | None:
+        if value is not None and len(value) > 300:
+            raise ValueError("Máximo 300 caracteres")
+        return value
+
+    @field_validator("synopsis")
+    @classmethod
+    def _synopsis_len(cls, value: str | None) -> str | None:
+        if value is not None and len(value) > 10_000:
+            raise ValueError("La sinopsis no puede superar 10 000 caracteres")
+        return value
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Plataformas ("Dónde ver") y personas
+# ─────────────────────────────────────────────────────────────────────────────
+def _external_url_required(value: str) -> str:
+    return _external(value, max_length=1000)
+
+
+class WatchLinkForm(BaseModel):
+    platform_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+    url: Annotated[str, AfterValidator(_external_url_required)]
+    offer_type: OfferType = OfferType.SUBSCRIPTION
+    region: Annotated[str, StringConstraints(strip_whitespace=True, to_upper=True, pattern=r"^[A-Za-z]{2}$")] = "MX"
+    logo_path: MediaRef = None
+
+
+PERSON_BIO_MAX = 100_000  # Text sin límite práctico: biografías extensas caben completas
+
+
+class PersonForm(BaseModel):
+    name: Name
+    bio: OptionalText = None
+    birth_date: date | None = None
+    death_date: date | None = None
+    place_of_birth: OptionalText = None
+    known_for_department: OptionalText = None
+    photo_path: MediaRef = None
+    tmdb_person_id: int | None = Field(default=None, gt=0)
+
+    @field_validator("bio")
+    @classmethod
+    def _bio_len(cls, value: str | None) -> str | None:
+        if value is not None and len(value) > PERSON_BIO_MAX:
+            raise ValueError("La biografía supera 100 000 caracteres")
+        return value.replace("\r\n", "\n") if value else value
+
+    @field_validator("place_of_birth")
+    @classmethod
+    def _place_len(cls, value: str | None) -> str | None:
+        if value is not None and len(value) > 200:
+            raise ValueError("Lugar de nacimiento: máximo 200 caracteres")
+        return value
+
+    @field_validator("known_for_department")
+    @classmethod
+    def _dept_len(cls, value: str | None) -> str | None:
+        return value[:64] if value else value
+
+    @model_validator(mode="after")
+    def _dates(self) -> PersonForm:
+        today = datetime.now(UTC).date()
+        if self.birth_date and self.birth_date > today:
+            raise ValueError("La fecha de nacimiento no puede ser futura")
+        if self.birth_date and self.death_date and self.death_date < self.birth_date:
+            raise ValueError("La fecha de fallecimiento es anterior al nacimiento")
+        return self
 
 
 # ─────────────────────────────────────────────────────────────────────────────

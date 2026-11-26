@@ -4,8 +4,9 @@
   {% for m in cards %}
   <a class="card" href="/movie/{{ m.slug }}" style="text-decoration:none;">
     <div class="poster-wrap">
+      {% if m.media_type is defined and m.media_type.value == 'series' %}<span class="card-type">Serie</span>{% endif %}
       {% if m.poster_path %}
-        <img src="{{ m.poster_path }}" alt="{{ m.title }}" onerror="this.style.display='none';this.nextElementSibling.style.display='block';">
+        <img src="{{ m.poster_path }}" alt="{{ m.title }}" loading="lazy" data-fallback="next">
         <div class="poster-fallback" style="display:none;">{{ m.title }}<br><small>{{ m.release_year or '' }}</small></div>
       {% else %}
         <div class="poster-fallback">{{ m.title }}<br><small>{{ m.release_year or '' }}</small></div>
@@ -27,6 +28,17 @@
   {% endfor %}
 </div>
 {% else %}
-  <p style="color:var(--muted);">No hay películas en esta sección todavía.</p>
+  <p style="color:var(--muted);">No hay títulos en esta sección todavía.</p>
+{% endif %}
+{% endmacro %}
+
+{# Paginación numérica. ``base`` termina en "?" o "&"; ``param`` es el nombre del parámetro de página. #}
+{% macro pagination(pager, base, param='page', anchor='') %}
+{% if pager and pager.pages > 1 %}
+<nav class="pager" aria-label="Paginación">
+  {% if pager.page > 1 %}<a href="{{ base }}{{ param }}={{ pager.page - 1 }}{{ anchor }}" rel="prev">← Anterior</a>{% endif %}
+  <span class="muted small">Página {{ pager.page }} de {{ pager.pages }} · {{ pager.total }} resultados</span>
+  {% if pager.page < pager.pages %}<a href="{{ base }}{{ param }}={{ pager.page + 1 }}{{ anchor }}" rel="next">Siguiente →</a>{% endif %}
+</nav>
 {% endif %}
 {% endmacro %}

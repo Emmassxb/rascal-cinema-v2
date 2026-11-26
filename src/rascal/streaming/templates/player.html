@@ -6,62 +6,107 @@
 <title>$title</title>
 <link href="https://cdn.jsdelivr.net/npm/video.js@8.10.0/dist/video-js.min.css" rel="stylesheet">
 <style>
-  :root { --bg:#14181c; --panel:#1c2228; --text:#e8eaed; --muted:#8899aa; --accent:#00e054; }
+  :root { --bg:#14181c; --panel:#1c2228; --line:#2c3440; --text:#e8eaed; --muted:#8899aa; --accent:#00e054; --warn:#ff8000; }
   html,body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
   .wrap { position:relative; max-width:1280px; margin:0 auto; }
   .video-js .vjs-play-progress, .video-js .vjs-volume-level { background:var(--accent); }
-  #overlay { position:absolute; inset:0 0 auto 0; aspect-ratio:16/9; display:flex; flex-direction:column; align-items:center;
-             justify-content:center; gap:10px; background:rgba(20,24,28,.88); pointer-events:none; text-align:center; padding:12px; }
+  .picker { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; padding:8px 10px; background:var(--panel);
+            border-bottom:1px solid var(--line); font-size:13px; }
+  .picker label { color:var(--muted); margin-right:6px; }
+  .picker select { background:#0f1316; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:4px 6px; font-size:13px; max-width:240px; }
+  .picker select:focus-visible { outline:2px solid #40bcf4; outline-offset:1px; }
+  .picker .field { display:inline-flex; align-items:center; }
+  .picker .field[hidden] { display:none; }
+  .type-tag { font-size:11px; font-weight:700; padding:2px 7px; border-radius:4px; border:1px solid var(--line); }
+  .type-tag.p2p { color:var(--warn); }
+  .type-tag.direct { color:var(--accent); }
+  #overlay { position:absolute; left:0; right:0; display:flex; flex-direction:column; align-items:center;
+             justify-content:center; gap:10px; background:rgba(20,24,28,.88); pointer-events:none; text-align:center; padding:12px; z-index:2; }
   #overlay.hidden { display:none; }
   .spinner { width:42px; height:42px; border:4px solid #333; border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation:none; } }
   .bar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:8px 10px; background:var(--panel); font-size:13px; color:var(--muted); }
-  .bar strong { color:var(--text); }
-  .progress { flex:1 1 160px; height:6px; background:#2c3440; border-radius:3px; overflow:hidden; }
+  .bar[hidden] { display:none; }
+  .progress { flex:1 1 160px; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
   .progress > div { height:100%; width:0; background:var(--accent); transition:width .5s; }
-  #seek, #versions-wrap { display:none; gap:6px; align-items:center; }
-  #seek input, #versions { background:#0f1316; color:var(--text); border:1px solid #2c3440; border-radius:4px; padding:3px 6px; }
-  #seek input { width:70px; }
+  #seek { display:none; gap:6px; align-items:center; }
+  #seek input { width:70px; background:#0f1316; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:3px 6px; }
   #seek button { background:var(--accent); color:#000; border:0; border-radius:4px; padding:4px 10px; cursor:pointer; }
   #msg { color:#f5a623; }
+  .privacy { margin:0; padding:7px 10px; font-size:12px; color:#f3dcc0; background:#2a2117; border-top:1px solid #4a3520; }
+  .privacy[hidden] { display:none; }
+  /* Menús propios en la barra de controles de Video.js (idioma y calidad) */
+  .video-js .vjs-rascal-choice { width:auto; min-width:4.2em; }
+  .video-js .vjs-audio-button { display:none !important; }
+  .video-js .vjs-rascal-choice .vjs-menu-item, .video-js .vjs-rascal-choice .vjs-menu-title { text-transform:none; }
+  .bar.msg-only:has(#seek[style*="none"]):has(#msg:empty) { display:none; }
+  .video-js .vjs-rascal-choice .vjs-icon-placeholder { font-size:11px; font-weight:700; line-height:3em; font-family:inherit; }
+  .video-js .vjs-rascal-choice .vjs-icon-placeholder::before { content:none; }
+  .video-js .vjs-rascal-choice .vjs-menu .vjs-menu-content { width:15em; left:-5em; max-height:18em; }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <div class="picker" role="group" aria-label="Opciones de reproducción">
+    <span id="type-tag" class="type-tag"></span>
+    <span class="field" id="lang-field" hidden><label for="lang">Idioma de audio</label><select id="lang"></select></span>
+    <span class="field" id="quality-field" hidden><label for="quality">Calidad</label><select id="quality"></select></span>
+    <span class="field" id="subs-field" hidden><label for="subs">Subtítulos</label><select id="subs"></select></span>
+  </div>
   <video id="player" class="video-js vjs-big-play-centered vjs-fluid" controls preload="auto" playsinline></video>
-  <div id="overlay"><div class="spinner"></div><div id="overlay-text">Conectando con peers…</div></div>
-  <div class="bar">
+  <div id="overlay"><div class="spinner"></div><div id="overlay-text">Preparando…</div></div>
+  <div class="bar" id="p2p-bar" hidden>
     <span id="state">—</span>
     <div class="progress" title="Archivo descargado"><div id="progress"></div></div>
     <span id="rates">—</span>
-    <span id="versions-wrap">
-      <label for="versions">Versión</label>
-      <select id="versions" aria-label="Cambiar de versión, calidad o idioma"></select>
-    </span>
+  </div>
+  <div class="bar msg-only">
     <form id="seek">
       <span>Ir a</span><input id="seek-input" placeholder="mm:ss" aria-label="Posición mm:ss">
       <button type="submit">Ir</button><span id="clock"></span>
     </form>
-    <span id="msg"></span>
+    <span id="msg" role="status"></span>
   </div>
+  <p class="privacy" id="privacy" hidden>
+    Privacidad P2P: esta versión se descarga por BitTorrent y la IP del equipo que ejecuta Rascal Cinema
+    (el servidor, o tu PC si usas el ejecutable) es visible en el enjambre. Los enlaces directos HTTPS y las
+    plataformas oficiales no participan en enjambres.
+  </p>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/video.js@8.10.0/dist/video.min.js"></script>
-<script>
+<script nonce="$nonce">
 (function () {
   "use strict";
   var cfg = $config_json;
   var FFMPEG_MODES = ["remux", "remux_audio", "transcode"];
   var usesFfmpeg = function (mode) { return FFMPEG_MODES.indexOf(mode) !== -1; };
-  var player = videojs("player", { fluid: true, controls: true, preload: "auto", playbackRates: [0.75, 1, 1.25, 1.5] });
-  var offset = 0, started = false, switched = false;
   var el = function (id) { return document.getElementById(id); };
+  var IS_SAFARI = !!(videojs.browser && videojs.browser.IS_ANY_SAFARI);
+  // HLS de otro dominio se pide con CORS; un MP4 directo sin CORS también debe poder reproducirse.
+  if (cfg.mode === "external" && cfg.sourceType === "hls") { el("player").setAttribute("crossorigin", "anonymous"); }
+  var player = videojs("player", {
+    fluid: true, controls: true, preload: "auto", playbackRates: [0.75, 1, 1.25, 1.5],
+    html5: {
+      vhs: { overrideNative: !IS_SAFARI },   // HLS por MSE (Chrome/Firefox/Edge); Safari usa el nativo
+      nativeAudioTracks: IS_SAFARI, nativeVideoTracks: IS_SAFARI
+    }
+  });
+  var offset = 0, started = false, switched = false;
+  var alts = cfg.alternatives || [];
+  var current = alts.filter(function (a) { return a.current; })[0] || { audio: "", quality: "", p2p: cfg.isP2P };
 
+  function placeOverlay() {
+    var v = player.el();
+    el("overlay").style.top = v.offsetTop + "px";
+    el("overlay").style.height = v.offsetHeight + "px";
+  }
   function fmtTime(s) {
     s = Math.max(0, Math.floor(s || 0));
     var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-    var mm = (h ? String(m).padStart(2, "0") : String(m)), ss = String(sec).padStart(2, "0");
-    return (h ? h + ":" : "") + mm + ":" + ss;
+    return (h ? h + ":" : "") + (h ? String(m).padStart(2, "0") : String(m)) + ":" + String(sec).padStart(2, "0");
   }
+  function position() { return usesFfmpeg(cfg.mode) ? offset + (player.currentTime() || 0) : (player.currentTime() || 0); }
   function setSource(startS) {
     if (!usesFfmpeg(cfg.mode)) {
       player.src({ src: cfg.streamUrl, type: cfg.mime });
@@ -70,54 +115,225 @@
       player.src({ src: cfg.remuxUrl + "&start=" + offset, type: "video/mp4" });
     }
   }
-  function showSeek() {
-    // fMP4 progresivo no permite seek nativo: se reinicia el remux desde la posición pedida
-    el("seek").style.display = usesFfmpeg(cfg.mode) ? "flex" : "none";
+  function showSeek() { el("seek").style.display = usesFfmpeg(cfg.mode) ? "flex" : "none"; }
+
+  // ── Cambio de versión (otra fuente con otro idioma o calidad) ────────────────────────
+  // Se recarga el iframe con la otra versión conservando la posición: así se libera el
+  // MediaSource y la conexión anterior, sin bloqueos al alternar entre P2P, MP4 y HLS.
+  function goTo(alt) {
+    if (!alt || alt.current) { return; }
+    player.pause();
+    el("msg").textContent = "Cambiando a " + alt.audio + " · " + alt.quality + "…";
+    var t = Math.floor(position());
+    window.location.replace(alt.url + (t > 1 ? "&t=" + t : ""));
+  }
+  function uniq(list) { return list.filter(function (v, i) { return list.indexOf(v) === i; }); }
+  function langs() { return uniq(alts.map(function (a) { return a.audio; })); }
+  function qualitiesFor(lang) { return alts.filter(function (a) { return a.audio === lang; }); }
+  function bestFor(lang) {
+    var same = qualitiesFor(lang);
+    return same.filter(function (a) { return a.quality === current.quality; })[0] || same[0];
   }
 
-  // ── Subtítulos: pistas nativas de Video.js (botón CC de la barra de controles) ──────────
-  // Se registran como remote text tracks; el usuario activa, desactiva o cambia de pista en CC.
+  // Pistas de audio DENTRO del stream (HLS con varios grupos de audio; MP4/MKV en Safari).
+  function audioTrackList() { var l = player.audioTracks ? player.audioTracks() : null; return l && l.length > 1 ? l : null; }
+  var ISO3 = { spa: "es", eng: "en", jpn: "ja", fra: "fr", fre: "fr", por: "pt", kor: "ko", deu: "de", ger: "de",
+               ita: "it", zho: "zh", chi: "zh", rus: "ru", cat: "ca", lat: "es-419" };
+  function languageName(code) {
+    if (!code || code === "und") { return ""; }
+    var tag = ISO3[code.toLowerCase()] || code;
+    try {
+      var name = new Intl.DisplayNames(["es"], { type: "language" }).of(tag);
+      return name && name !== tag ? name.charAt(0).toUpperCase() + name.slice(1) : code;
+    } catch (e) { return code; }
+  }
+  function trackLabel(t, i) {
+    var generic = !t.label || /^(audio|track|pista)[ _-]?\d+$/i.test(t.label);
+    var lang = languageName(t.language);
+    if (generic) { return lang || t.label || ("Pista " + (i + 1)); }
+    return lang && t.label.toLowerCase().indexOf(lang.toLowerCase()) === -1 ? t.label + " (" + lang + ")" : t.label;
+  }
+  function enableTrack(index) {
+    var list = audioTrackList();
+    if (!list) { return; }
+    for (var i = 0; i < list.length; i++) { list[i].enabled = (i === index); }
+  }
+
+  function languageOptions() {
+    var opts = [], list = audioTrackList();
+    if (list) {
+      for (var i = 0; i < list.length; i++) {
+        opts.push({ value: "track:" + i, label: trackLabel(list[i], i), selected: list[i].enabled });
+      }
+    }
+    langs().forEach(function (lang) {
+      if (lang === current.audio && list) { return; }  // la versión actual ya está representada por sus pistas
+      opts.push({ value: "lang:" + lang, label: list ? lang + " (otra versión)" : lang, selected: !list && lang === current.audio });
+    });
+    return opts;
+  }
+  function qualityOptions() {
+    return qualitiesFor(current.audio).map(function (a) {
+      return { value: "src:" + a.id, label: a.quality + (a.p2p ? " · P2P" : " · directo"), selected: !!a.current };
+    });
+  }
+  function pick(value) {
+    if (value.indexOf("track:") === 0) { enableTrack(parseInt(value.slice(6), 10)); refresh(); return; }
+    if (value.indexOf("lang:") === 0) { goTo(bestFor(value.slice(5))); return; }
+    if (value.indexOf("src:") === 0) {
+      var id = parseInt(value.slice(4), 10);
+      goTo(alts.filter(function (a) { return a.id === id; })[0]);
+    }
+  }
+
+  // ── Selectores visibles arriba ───────────────────────────────────────────────────────
+  function fillSelect(select, options) {
+    select.textContent = "";
+    options.forEach(function (o) {
+      var opt = document.createElement("option");
+      opt.value = o.value; opt.textContent = o.label; opt.selected = !!o.selected;
+      select.appendChild(opt);
+    });
+  }
+  el("lang").addEventListener("change", function () { pick(el("lang").value); });
+  el("quality").addEventListener("change", function () { pick(el("quality").value); });
+
+  // ── Los mismos selectores dentro de la barra de controles de Video.js ────────────────
+  var MenuButton = videojs.getComponent("MenuButton");
+  var MenuItem = videojs.getComponent("MenuItem");
+  class ChoiceItem extends MenuItem {
+    constructor(p, options) {
+      options.selectable = true;
+      options.multiSelectable = false;
+      super(p, options);
+      this.selected(!!options.selected);
+    }
+    handleClick() { this.options_.onPick(this.options_.value); }
+  }
+  class ChoiceButton extends MenuButton {
+    constructor(p, options) {
+      super(p, options);
+      this.controlText(options.title);
+      var ph = this.menuButton_.el().querySelector(".vjs-icon-placeholder");
+      if (ph) { ph.textContent = options.short; }
+    }
+    buildCSSClass() { return "vjs-rascal-choice " + super.buildCSSClass(); }
+    update() {
+      super.update();
+      if (!this.items || this.items.length < 2) { this.hide(); } else { this.show(); }  // sólo si hay elección
+    }
+    createItems() {
+      var opts = (this.options_.getItems && this.options_.getItems()) || [];
+      var self = this;
+      return opts.map(function (o) {
+        return new ChoiceItem(self.player_, { label: o.label, value: o.value, selected: o.selected, onPick: pick });
+      });
+    }
+  }
+  videojs.registerComponent("RascalChoiceButton", ChoiceButton);
+  var bar = player.getChild("ControlBar");
+  var at = bar.children().indexOf(bar.getChild("SubsCapsButton"));
+  if (at < 0) { at = bar.children().length - 1; }
+  var langButton = bar.addChild("RascalChoiceButton", { title: "Idioma de audio", short: "Idioma", getItems: languageOptions }, at);
+  var qualityButton = bar.addChild("RascalChoiceButton", { title: "Calidad", short: "Calidad", getItems: qualityOptions }, at + 1);
+  langButton.addClass("vjs-rascal-lang");
+  qualityButton.addClass("vjs-rascal-quality");
+  // El botón nativo de pistas de audio se oculta por CSS: nuestro menú «Idioma» ya las incluye.
+
+  // ── Subtítulos: pistas nativas (botón CC) + selector de arriba sincronizado ──────────
   function loadSubtitles() {
     (cfg.subtitles || []).forEach(function (s) {
       player.addRemoteTextTrack({ kind: "subtitles", src: s.url, srclang: s.srclang || "und", label: s.label, default: false }, false);
     });
   }
-
-  // ── Selector de versiones (calidad / idioma): otra fuente de la misma película ─────────
-  function loadVersions() {
-    var alts = cfg.alternatives || [];
-    if (alts.length < 2) { return; }
-    var select = el("versions");
-    alts.forEach(function (a) {
-      var opt = document.createElement("option");
-      opt.value = a.url;
-      opt.textContent = a.label || ("Versión " + a.id);
-      opt.selected = !!a.current;
-      select.appendChild(opt);
+  function subtitleTracks() {
+    var all = player.textTracks(), out = [];
+    for (var i = 0; i < all.length; i++) { if (all[i].kind === "subtitles" || all[i].kind === "captions") { out.push(all[i]); } }
+    return out;
+  }
+  function refreshSubs() {
+    var tracks = subtitleTracks();
+    el("subs-field").hidden = tracks.length === 0;
+    var opts = [{ value: "off", label: "Desactivados", selected: true }];
+    tracks.forEach(function (t, i) {
+      if (t.mode === "showing") { opts[0].selected = false; }
+      opts.push({ value: String(i), label: t.label || t.language || ("Pista " + (i + 1)), selected: t.mode === "showing" });
     });
-    el("versions-wrap").style.display = "inline-flex";
-    select.addEventListener("change", function () { window.location.href = select.value; });
+    fillSelect(el("subs"), opts);
+  }
+  el("subs").addEventListener("change", function () {
+    var v = el("subs").value;
+    subtitleTracks().forEach(function (t, i) { t.mode = (String(i) === v) ? "showing" : "disabled"; });
+  });
+  player.textTracks().addEventListener("change", refreshSubs);
+  player.textTracks().addEventListener("addtrack", refreshSubs);
+
+  function refresh() {
+    var lo = languageOptions(), qo = qualityOptions();
+    el("lang-field").hidden = lo.length < 2;
+    el("quality-field").hidden = qo.length < 2;
+    fillSelect(el("lang"), lo);
+    fillSelect(el("quality"), qo);
+    langButton.update();
+    qualityButton.update();
+  }
+  var audio = player.audioTracks && player.audioTracks();
+  if (audio) {
+    audio.addEventListener("addtrack", refresh);
+    audio.addEventListener("removetrack", refresh);
+    audio.addEventListener("change", refresh);
   }
 
-  setSource(0);
+  // ── Arranque ─────────────────────────────────────────────────────────────────────────
+  var tag = el("type-tag");
+  tag.textContent = { torrent: "P2P · .torrent", magnet: "P2P · magnet", direct_url: "Directo HTTPS", hls: "HLS" }[cfg.sourceType] || cfg.sourceType;
+  tag.className = "type-tag " + (cfg.isP2P ? "p2p" : "direct");
+  el("privacy").hidden = !cfg.isP2P;
+  el("p2p-bar").hidden = !cfg.isP2P;
+  el("overlay-text").textContent = cfg.isP2P ? "Conectando con peers…" : "Cargando video…";
+  placeOverlay();
+  window.addEventListener("resize", placeOverlay);
+  player.on("loadedmetadata", placeOverlay);
+
+  // Reanudar en la misma posición tras cambiar de versión (?t=segundos).
+  function resumeAt() {
+    var d = player.duration();
+    var target = isFinite(d) && d > 0 ? Math.min(cfg.startAt, Math.max(0, d - 3)) : cfg.startAt;
+    if (target > 0) { player.currentTime(target); }
+  }
+  if (cfg.startAt && !usesFfmpeg(cfg.mode)) {
+    player.one(["loadedmetadata", "canplay"], function once() {
+      if (!once.done) { once.done = true; resumeAt(); }
+    });
+  }
+  setSource(usesFfmpeg(cfg.mode) ? cfg.startAt : 0);
   showSeek();
   loadSubtitles();
-  loadVersions();
+  refresh();
+  refreshSubs();
 
   player.on("playing", function () { started = true; el("overlay").classList.add("hidden"); });
+  player.on("canplay", function () { if (!cfg.isP2P) { el("overlay").classList.add("hidden"); } });
   player.on("timeupdate", function () {
     if (usesFfmpeg(cfg.mode)) {
-      el("clock").textContent = fmtTime(offset + player.currentTime()) + (cfg.durationS ? " / " + fmtTime(cfg.durationS) : "");
+      el("clock").textContent = fmtTime(position()) + (cfg.durationS ? " / " + fmtTime(cfg.durationS) : "");
     }
   });
   player.on("error", function () {
-    // Fallback: si el navegador no decodifica el contenedor/códec directo, se pasa a remux.
+    if (cfg.mode === "external") {
+      el("overlay").classList.add("hidden");
+      el("msg").textContent = cfg.sourceType === "hls"
+        ? "No se pudo cargar la lista HLS: el servidor de origen debe permitir CORS y el enlace debe seguir vigente."
+        : "No se pudo cargar el enlace directo: puede haber caducado, o el formato/códec no es compatible con el navegador.";
+      return;
+    }
+    // P2P: si el navegador no decodifica el contenedor/códec directo, se pasa a remux al vuelo.
     if (!usesFfmpeg(cfg.mode) && !switched) {
       switched = true;
       cfg.mode = "remux";
       el("msg").textContent = "Formato no soportado directamente: usando remux al vuelo.";
       player.error(null);
-      setSource(0);
+      setSource(position());
       showSeek();
       player.play();
     }
@@ -126,17 +342,16 @@
     ev.preventDefault();
     var parts = el("seek-input").value.trim().split(":").map(Number);
     if (parts.some(isNaN)) { return; }
-    var seconds = parts.reduce(function (acc, v) { return acc * 60 + v; }, 0);
-    setSource(seconds);
+    setSource(parts.reduce(function (acc, v) { return acc * 60 + v; }, 0));
     player.play();
   });
 
+  // ── Estado de la descarga P2P ────────────────────────────────────────────────────────
   function render(s) {
     var pct = Math.round((s.progress || 0) * 1000) / 10;
     el("progress").style.width = pct + "%";
-    el("state").innerHTML = "<strong>" + (s.state || "—") + "</strong> · " + pct + "%";
-    var mbps = ((s.download_rate || 0) / 1048576).toFixed(2);
-    el("rates").textContent = mbps + " MB/s · " + (s.num_peers || 0) + " peers";
+    el("state").textContent = (s.state || "—") + " · " + pct + "%";
+    el("rates").textContent = ((s.download_rate || 0) / 1048576).toFixed(2) + " MB/s · " + (s.num_peers || 0) + " peers";
     if (s.error) { el("msg").textContent = s.error; }
     if (s.playback_mode === "unsupported") {
       el("msg").textContent = "Este archivo no es reproducible en el navegador sin transcodificar.";
@@ -152,6 +367,7 @@
     }
   }
   function poll() {
+    if (!cfg.statusUrl) { return; }
     fetch(cfg.statusUrl, { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (s) { if (s) { render(s); } })
@@ -159,6 +375,20 @@
       .then(function () { setTimeout(poll, 2000); });
   }
   poll();
+
+  // Altura real para el iframe de la ficha (mismo origen): evita recortar la barra de controles.
+  function reportHeight() {
+    if (window.parent === window) { return; }
+    try {
+      // scrollHeight nunca baja de la altura del iframe: se mide el contenido real.
+      var h = Math.ceil(document.querySelector(".wrap").getBoundingClientRect().height);
+      window.parent.postMessage({ rascalPlayerHeight: h }, window.location.origin);
+    } catch (e) { /* padre de otro origen: se queda con su altura por defecto */ }
+  }
+  if (window.ResizeObserver) { new ResizeObserver(reportHeight).observe(document.body); }
+  player.on("loadedmetadata", reportHeight);
+  reportHeight();
+  window.rascalPlayer = { player: player, config: cfg, pick: pick, languageOptions: languageOptions, qualityOptions: qualityOptions };
 })();
 </script>
 </body>

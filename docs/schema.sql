@@ -1,4 +1,4 @@
--- Esquema PostgreSQL generado desde rascal.data.models (SQLAlchemy 2.0).
+-- Esquema PostgreSQL generado desde rascal.data.models (SQLAlchemy 2.0) · v2.2 (migración 0003).
 -- Fuente de verdad: los modelos ORM + migrations/ (Alembic). Este archivo es documentación/revisión.
 
 CREATE TABLE companies (
@@ -29,8 +29,11 @@ CREATE TABLE people (
 	birth_date DATE, 
 	death_date DATE, 
 	photo_path VARCHAR(500), 
+	place_of_birth VARCHAR(200), 
+	known_for_department VARCHAR(64), 
 	tmdb_id INTEGER, 
 	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITHOUT TIME ZONE, 
 	CONSTRAINT pk_people PRIMARY KEY (id), 
 	CONSTRAINT uq_people_slug UNIQUE (slug), 
 	CONSTRAINT uq_people_tmdb_id UNIQUE (tmdb_id)
@@ -101,6 +104,7 @@ CREATE INDEX ix_login_challenges_user_created ON login_challenges (user_id, crea
 
 CREATE TABLE movies (
 	id SERIAL NOT NULL, 
+	media_type VARCHAR(24) DEFAULT 'movie' NOT NULL, 
 	slug VARCHAR(120) NOT NULL, 
 	title VARCHAR(300) NOT NULL, 
 	original_title VARCHAR(300), 
@@ -119,19 +123,50 @@ CREATE TABLE movies (
 	is_published BOOLEAN NOT NULL, 
 	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, 
+	rating_avg FLOAT, 
+	rating_count INTEGER DEFAULT '0' NOT NULL, 
+	review_count INTEGER DEFAULT '0' NOT NULL, 
+	watchlist_count INTEGER DEFAULT '0' NOT NULL, 
+	popularity INTEGER DEFAULT '0' NOT NULL, 
 	CONSTRAINT pk_movies PRIMARY KEY (id), 
 	CONSTRAINT ck_movies_release_year_range CHECK (release_year IS NULL OR release_year BETWEEN 1870 AND 2100), 
 	CONSTRAINT ck_movies_runtime_positive CHECK (runtime_min IS NULL OR runtime_min > 0), 
+	CONSTRAINT uq_movies_media_type_tmdb_id UNIQUE (media_type, tmdb_id), 
+	CONSTRAINT ck_movies_media_type CHECK (media_type IN ('movie', 'series')), 
 	CONSTRAINT uq_movies_slug UNIQUE (slug), 
 	CONSTRAINT uq_movies_imdb_id UNIQUE (imdb_id), 
-	CONSTRAINT uq_movies_tmdb_id UNIQUE (tmdb_id), 
 	CONSTRAINT uq_movies_legacy_movie_id UNIQUE (legacy_movie_id), 
 	CONSTRAINT fk_movies_owner_id_users FOREIGN KEY(owner_id) REFERENCES users (id) ON DELETE SET NULL
 );
 CREATE INDEX ix_movies_is_published ON movies (is_published);
 CREATE INDEX ix_movies_owner_id ON movies (owner_id);
+CREATE INDEX ix_movies_published_created ON movies (is_published, created_at);
+CREATE INDEX ix_movies_published_popularity ON movies (is_published, popularity);
+CREATE INDEX ix_movies_published_rating ON movies (is_published, rating_avg);
+CREATE INDEX ix_movies_published_title ON movies (is_published, title, id);
 CREATE INDEX ix_movies_release_year ON movies (release_year);
 CREATE INDEX ix_movies_title ON movies (title);
+CREATE INDEX ix_movies_tmdb_id ON movies (tmdb_id);
+CREATE INDEX ix_movies_type_published_year ON movies (media_type, is_published, release_year);
+
+CREATE TABLE partner_requests (
+	id SERIAL NOT NULL, 
+	user_id INTEGER NOT NULL, 
+	status VARCHAR(24) NOT NULL, 
+	display_name VARCHAR(80), 
+	reason TEXT NOT NULL, 
+	portfolio_url VARCHAR(500), 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	reviewed_at TIMESTAMP WITHOUT TIME ZONE, 
+	reviewed_by INTEGER, 
+	CONSTRAINT pk_partner_requests PRIMARY KEY (id), 
+	CONSTRAINT fk_partner_requests_user_id_users FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE, 
+	CONSTRAINT ck_partner_requests_partner_request_status CHECK (status IN ('pending', 'approved', 'rejected')), 
+	CONSTRAINT fk_partner_requests_reviewed_by_users FOREIGN KEY(reviewed_by) REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_partner_requests_status ON partner_requests (status);
+CREATE INDEX ix_partner_requests_user_id ON partner_requests (user_id);
+CREATE UNIQUE INDEX uq_partner_requests_one_pending ON partner_requests (user_id) WHERE status = 'pending';
 
 CREATE TABLE favorite_movies (
 	user_id INTEGER NOT NULL, 
@@ -142,43 +177,6 @@ CREATE TABLE favorite_movies (
 	CONSTRAINT fk_favorite_movies_user_id_users FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE, 
 	CONSTRAINT fk_favorite_movies_movie_id_movies FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE
 );
-
-CREATE TABLE media_sources (
-	id SERIAL NOT NULL, 
-	movie_id INTEGER NOT NULL, 
-	kind VARCHAR(24) NOT NULL, 
-	label VARCHAR(120) NOT NULL, 
-	magnet_uri TEXT, 
-	torrent_data BYTEA, 
-	info_hash VARCHAR(64) NOT NULL, 
-	display_name VARCHAR(500), 
-	total_size BIGINT, 
-	file_index INTEGER, 
-	file_path VARCHAR(1000), 
-	file_size BIGINT, 
-	container VARCHAR(16), 
-	video_codec VARCHAR(32), 
-	audio_codec VARCHAR(32), 
-	duration_s FLOAT, 
-	playback_mode VARCHAR(24) NOT NULL, 
-	status VARCHAR(24) NOT NULL, 
-	status_message VARCHAR(500), 
-	rights_statement VARCHAR(500) NOT NULL, 
-	added_by_id INTEGER, 
-	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
-	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, 
-	CONSTRAINT pk_media_sources PRIMARY KEY (id), 
-	CONSTRAINT uq_media_sources_movie_info_hash UNIQUE (movie_id, info_hash), 
-	CONSTRAINT ck_media_sources_payload_matches_kind CHECK ((kind = 'magnet' AND magnet_uri IS NOT NULL) OR (kind = 'torrent_file' AND torrent_data IS NOT NULL)), 
-	CONSTRAINT fk_media_sources_movie_id_movies FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE, 
-	CONSTRAINT ck_media_sources_source_kind CHECK (kind IN ('magnet', 'torrent_file')), 
-	CONSTRAINT ck_media_sources_playback_mode CHECK (playback_mode IN ('unknown', 'direct', 'remux', 'remux_audio', 'transcode', 'unsupported')), 
-	CONSTRAINT ck_media_sources_source_status CHECK (status IN ('pending', 'downloading', 'complete', 'error', 'disabled')), 
-	CONSTRAINT fk_media_sources_added_by_id_users FOREIGN KEY(added_by_id) REFERENCES users (id) ON DELETE SET NULL
-);
-CREATE INDEX ix_media_sources_info_hash ON media_sources (info_hash);
-CREATE INDEX ix_media_sources_movie_id ON media_sources (movie_id);
-CREATE INDEX ix_media_sources_status ON media_sources (status);
 
 CREATE TABLE movie_companies (
 	movie_id INTEGER NOT NULL, 
@@ -254,6 +252,42 @@ CREATE INDEX ix_reviews_movie_created ON reviews (movie_id, created_at);
 CREATE INDEX ix_reviews_movie_rating ON reviews (movie_id, rating);
 CREATE INDEX ix_reviews_user_created ON reviews (user_id, created_at);
 
+CREATE TABLE seasons (
+	id SERIAL NOT NULL, 
+	series_id INTEGER NOT NULL, 
+	season_number SMALLINT NOT NULL, 
+	title VARCHAR(300), 
+	overview TEXT, 
+	poster_path VARCHAR(500), 
+	air_year SMALLINT, 
+	tmdb_season_id INTEGER, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	CONSTRAINT pk_seasons PRIMARY KEY (id), 
+	CONSTRAINT uq_seasons_series_number UNIQUE (series_id, season_number), 
+	CONSTRAINT ck_seasons_season_number_range CHECK (season_number BETWEEN 0 AND 999), 
+	CONSTRAINT ck_seasons_air_year_range CHECK (air_year IS NULL OR air_year BETWEEN 1870 AND 2100), 
+	CONSTRAINT fk_seasons_series_id_movies FOREIGN KEY(series_id) REFERENCES movies (id) ON DELETE CASCADE
+);
+
+CREATE TABLE watch_links (
+	id SERIAL NOT NULL, 
+	movie_id INTEGER NOT NULL, 
+	platform_name VARCHAR(80) NOT NULL, 
+	platform_slug VARCHAR(80) NOT NULL, 
+	url VARCHAR(1000) NOT NULL, 
+	offer_type VARCHAR(24) NOT NULL, 
+	region VARCHAR(2) NOT NULL, 
+	logo_path VARCHAR(500), 
+	added_by_id INTEGER, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	CONSTRAINT pk_watch_links PRIMARY KEY (id), 
+	CONSTRAINT uq_watch_links_offer UNIQUE (movie_id, platform_slug, offer_type, region), 
+	CONSTRAINT fk_watch_links_movie_id_movies FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE, 
+	CONSTRAINT ck_watch_links_offer_type CHECK (offer_type IN ('subscription', 'rent', 'buy', 'free')), 
+	CONSTRAINT fk_watch_links_added_by_id_users FOREIGN KEY(added_by_id) REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_watch_links_movie_id ON watch_links (movie_id);
+
 CREATE TABLE watchlist (
 	user_id INTEGER NOT NULL, 
 	movie_id INTEGER NOT NULL, 
@@ -263,6 +297,24 @@ CREATE TABLE watchlist (
 	CONSTRAINT fk_watchlist_movie_id_movies FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE
 );
 CREATE INDEX ix_watchlist_movie_id ON watchlist (movie_id);
+
+CREATE TABLE episodes (
+	id SERIAL NOT NULL, 
+	season_id INTEGER NOT NULL, 
+	episode_number SMALLINT NOT NULL, 
+	title VARCHAR(300), 
+	synopsis TEXT, 
+	runtime_min SMALLINT, 
+	still_path VARCHAR(500), 
+	air_date DATE, 
+	tmdb_episode_id INTEGER, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	CONSTRAINT pk_episodes PRIMARY KEY (id), 
+	CONSTRAINT uq_episodes_season_number UNIQUE (season_id, episode_number), 
+	CONSTRAINT ck_episodes_episode_number_range CHECK (episode_number BETWEEN 0 AND 9999), 
+	CONSTRAINT ck_episodes_episode_runtime_positive CHECK (runtime_min IS NULL OR runtime_min > 0), 
+	CONSTRAINT fk_episodes_season_id_seasons FOREIGN KEY(season_id) REFERENCES seasons (id) ON DELETE CASCADE
+);
 
 CREATE TABLE review_votes (
 	review_id INTEGER NOT NULL, 
@@ -275,9 +327,56 @@ CREATE TABLE review_votes (
 	CONSTRAINT fk_review_votes_user_id_users FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE
 );
 
--- Recomendado en PostgreSQL para búsquedas ILIKE '%texto%' (no usan índices B-tree):
--- CREATE EXTENSION IF NOT EXISTS pg_trgm;
--- CREATE INDEX ix_movies_title_trgm ON movies USING gin (title gin_trgm_ops);
--- CREATE INDEX ix_people_name_trgm ON people USING gin (name gin_trgm_ops);
--- CREATE INDEX ix_companies_name_trgm ON companies USING gin (name gin_trgm_ops);
--- CREATE INDEX ix_users_username_trgm ON users USING gin (username gin_trgm_ops);
+CREATE TABLE media_sources (
+	id SERIAL NOT NULL, 
+	movie_id INTEGER NOT NULL, 
+	episode_id INTEGER, 
+	kind VARCHAR(24) NOT NULL, 
+	label VARCHAR(120) NOT NULL, 
+	audio_language VARCHAR(40), 
+	quality VARCHAR(20), 
+	magnet_uri TEXT, 
+	torrent_data BYTEA, 
+	info_hash VARCHAR(64), 
+	stream_url TEXT, 
+	url_hash VARCHAR(64), 
+	display_name VARCHAR(500), 
+	total_size BIGINT, 
+	file_index INTEGER, 
+	file_path VARCHAR(1000), 
+	file_size BIGINT, 
+	container VARCHAR(16), 
+	video_codec VARCHAR(32), 
+	audio_codec VARCHAR(32), 
+	duration_s FLOAT, 
+	playback_mode VARCHAR(24) NOT NULL, 
+	status VARCHAR(24) NOT NULL, 
+	status_message VARCHAR(500), 
+	rights_statement VARCHAR(500) NOT NULL, 
+	added_by_id INTEGER, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, 
+	CONSTRAINT pk_media_sources PRIMARY KEY (id), 
+	CONSTRAINT uq_media_sources_movie_info_hash UNIQUE (movie_id, info_hash), 
+	CONSTRAINT uq_media_sources_movie_url_hash UNIQUE (movie_id, url_hash), 
+	CONSTRAINT ck_media_sources_payload_matches_kind CHECK ((kind = 'magnet' AND magnet_uri IS NOT NULL AND info_hash IS NOT NULL) OR (kind = 'torrent_file' AND torrent_data IS NOT NULL AND info_hash IS NOT NULL) OR (kind IN ('direct_url', 'hls') AND stream_url IS NOT NULL AND url_hash IS NOT NULL)), 
+	CONSTRAINT fk_media_sources_movie_id_movies FOREIGN KEY(movie_id) REFERENCES movies (id) ON DELETE CASCADE, 
+	CONSTRAINT fk_media_sources_episode_id_episodes FOREIGN KEY(episode_id) REFERENCES episodes (id) ON DELETE CASCADE, 
+	CONSTRAINT ck_media_sources_source_kind CHECK (kind IN ('magnet', 'torrent_file', 'direct_url', 'hls')), 
+	CONSTRAINT ck_media_sources_playback_mode CHECK (playback_mode IN ('unknown', 'direct', 'remux', 'remux_audio', 'transcode', 'unsupported')), 
+	CONSTRAINT ck_media_sources_source_status CHECK (status IN ('pending', 'downloading', 'complete', 'error', 'disabled')), 
+	CONSTRAINT fk_media_sources_added_by_id_users FOREIGN KEY(added_by_id) REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_media_sources_episode_id ON media_sources (episode_id);
+CREATE INDEX ix_media_sources_info_hash ON media_sources (info_hash);
+CREATE INDEX ix_media_sources_movie_id ON media_sources (movie_id);
+CREATE INDEX ix_media_sources_status ON media_sources (status);
+
+-- Búsqueda con ILIKE '%texto%' en PostgreSQL: SQLAlchemy genera lower(col) LIKE lower(:q), así que el
+-- índice trigram debe ser sobre lower(col). Sin pg_trgm la búsqueda recorre la tabla (≈50 ms con 86 000 títulos).
+-- Ubuntu/Debian: el paquete postgresql-contrib trae la extensión.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS ix_movies_title_trgm ON movies USING gin (lower(title) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_people_name_trgm ON people USING gin (lower(name) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_companies_name_trgm ON companies USING gin (lower(name) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_users_username_trgm ON users USING gin (lower(username) gin_trgm_ops);

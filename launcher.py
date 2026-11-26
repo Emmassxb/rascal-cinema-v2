@@ -118,6 +118,17 @@ def prepare_environment(port: int) -> Path:
     return root
 
 
+def _read_dotenv(path: Path) -> None:
+    """Sólo RASCAL_HOST y RASCAL_PORT, que se necesitan ANTES de crear Settings (el resto lo lee pydantic)."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.split("#", 1)[0].strip().strip('"').strip("'")
+        if key in ("RASCAL_HOST", "RASCAL_PORT") and value:
+            os.environ.setdefault(key, value)
+
+
 def _load_or_create_secrets(data: Path) -> None:
     path = data / "secrets.json"
     if path.exists():
@@ -177,12 +188,18 @@ def open_browser_when_ready(url: str, timeout_s: float = 30.0) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Lanza RascalCinema en tu navegador.")
     parser.add_argument("--install-deps", action="store_true", help="instala requirements.txt si falta algo (sólo desarrollo)")
-    parser.add_argument("--port", type=int, default=PREFERRED_PORT)
+    parser.add_argument("--port", type=int, default=None, help="puerto (por defecto RASCAL_PORT o el primero libre desde 8001)")
+    parser.add_argument("--host", default=None, help="interfaz (por defecto RASCAL_HOST o 127.0.0.1)")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args(argv)
 
     ensure_dependencies(install=args.install_deps)
-    port = pick_port(args.port)
+    os.chdir(app_root())
+    _read_dotenv(app_root() / ".env")
+    host = args.host or os.environ.get("RASCAL_HOST") or "127.0.0.1"
+    fixed_port = args.port or (int(os.environ["RASCAL_PORT"]) if os.environ.get("RASCAL_PORT") else None)
+    port = fixed_port if fixed_port else pick_port(PREFERRED_PORT)
+    os.environ["RASCAL_HOST"], os.environ["RASCAL_PORT"] = host, str(port)
     prepare_environment(port)
     run_migrations()
 
@@ -192,9 +209,11 @@ def main(argv: list[str] | None = None) -> int:
 
     url = f"http://localhost:{port}/"
     log(f"Servidor en {url}  ·  Ctrl+C para cerrar (los torrents se guardan antes de salir).")
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        log(f"AVISO: escuchando en {host}: otros equipos de la red pueden conectarse. Usa 127.0.0.1 si no lo necesitas.")
     if not args.no_browser:
         open_browser_when_ready(url)
-    uvicorn.run(create_app(), host="127.0.0.1", port=port, workers=1, log_level="warning")
+    uvicorn.run(create_app(), host=host, port=port, workers=1, log_level="warning")
     log("Servidor detenido.")
     return 0
 

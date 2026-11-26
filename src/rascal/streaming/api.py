@@ -41,10 +41,11 @@ from rascal.auth.tokens import TokenError, internal_token, playback_token, verif
 from rascal.config import Settings, get_settings
 from rascal.data.db import get_sessionmaker, session_scope
 from rascal.data.enums import PlaybackMode, SourceStatus
-from rascal.data.models import MediaSource, Movie
+from rascal.data.models import Episode, MediaSource, Movie
 from rascal.data.repositories.media import SourceRepository
+from rascal.providers import MediaTarget, build_registry
+from rascal.security import content_security_policy, csp_nonce
 from rascal.domain.playback import MIME_BY_CONTAINER, decide_playback, guess_mode_from_container
-from rascal.media.subtitles import list_subtitles
 from rascal.streaming.downloads import PurgeError, purge_local_download
 from rascal.streaming.engine import EngineListener, MetadataTimeout, SourceSpec, StreamingEngine, build_engine
 from rascal.streaming.http_range import RangeNotSatisfiable, parse_range
@@ -117,6 +118,7 @@ def create_app(
 ) -> FastAPI:
     settings = settings or get_settings()
     factory = session_factory or get_sessionmaker()
+    providers = build_registry(settings)
     secret = settings.secret_key.get_secret_value()
     probe_locks: dict[int, asyncio.Lock] = {}
     background: set[asyncio.Task[None]] = set()  # referencias fuertes a tareas en segundo plano
@@ -139,7 +141,13 @@ def create_app(
         finally:
             await asyncio.to_thread(eng.stop)
 
-    app = FastAPI(title="Rascal Streamer", version="2.0.0", lifespan=lifespan)
+    is_prod = settings.env == "prod"
+    app = FastAPI(
+        title="Rascal Streamer", version="2.2.0", lifespan=lifespan,
+        # En producción no se publica la documentación OpenAPI (superficie de ataque innecesaria).
+        docs_url=None if is_prod else "/docs", redoc_url=None if is_prod else "/redoc",
+        openapi_url=None if is_prod else "/openapi.json",
+    )
 
     # ── Utilidades internas ──────────────────────────────────────────────────
     def _engine(request: Request) -> StreamingEngine:
@@ -147,7 +155,7 @@ def create_app(
 
     def _spec_from(source: MediaSource) -> SourceSpec:
         return SourceSpec(
-            source_id=source.id, info_hash=source.info_hash, kind=source.kind, magnet_uri=source.magnet_uri,
+            source_id=source.id, info_hash=source.info_hash or "", kind=source.kind, magnet_uri=source.magnet_uri,
             torrent_data=source.torrent_data, file_index_hint=source.file_index, file_path_hint=source.file_path,
         )
 
@@ -157,14 +165,25 @@ def create_app(
             if source is None:
                 raise HTTPException(404, "Fuente no encontrada")
             movie = session.get(Movie, source.movie_id)
+            title = movie.title if movie else source.display_name or "Video"
+            if source.episode_id is not None:
+                episode = session.get(Episode, source.episode_id)
+                if episode is not None:
+                    title = f"{title} · T{episode.season.season_number}E{episode.episode_number}" + (
+                        f" · {episode.title}" if episode.title else ""
+                    )
+            plan = providers.plan(source)
             return {
-                "spec": _spec_from(source),
+                "spec": _spec_from(source) if source.is_p2p else None,
+                "is_p2p": source.is_p2p,
+                "plan": plan,
                 "movie_id": source.movie_id,
+                "episode_id": source.episode_id,
                 "status": source.status,
                 "mode": source.playback_mode,
                 "container": source.container,
                 "duration_s": source.duration_s,
-                "title": movie.title if movie else source.display_name or "Video",
+                "title": title,
                 "label": source.label,
             }
 
@@ -183,10 +202,14 @@ def create_app(
             if source is not None and source.status is not SourceStatus.COMPLETE:
                 source.status, source.status_message = status, message
 
-    async def _ensure_running(request: Request, source_id: int) -> dict[str, Any]:
+    async def _ensure_running(request: Request, source_id: int, *, allow_direct: bool = False) -> dict[str, Any]:
         info = await asyncio.to_thread(_load_source, source_id)
         if info["status"] is SourceStatus.DISABLED:
             raise HTTPException(409, "La fuente está desactivada")
+        if not info["is_p2p"]:
+            if allow_direct:
+                return info  # enlace directo/HLS: el navegador lo carga; libtorrent no interviene
+            raise HTTPException(409, "Fuente directa: se reproduce desde su URL, no a través del motor P2P")
         eng = _engine(request)
         if not eng.has(source_id):
             await asyncio.to_thread(eng.ensure, info["spec"])
@@ -337,7 +360,9 @@ def create_app(
 
     @app.post("/api/sources/{source_id}/start", dependencies=[Depends(require_service)])
     async def start_source(request: Request, source_id: int) -> dict[str, Any]:
-        await _ensure_running(request, source_id)
+        info = await _ensure_running(request, source_id, allow_direct=True)
+        if not info["is_p2p"]:
+            return {"source_id": source_id, "state": "direct", "source_type": info["plan"].source_type}
         status = _engine(request).status(source_id)
         return status.as_dict() if status else {"source_id": source_id, "state": "starting"}
 
@@ -356,6 +381,8 @@ def create_app(
                 if source is None:
                     raise HTTPException(404, "Fuente no encontrada")
                 info_hash = source.info_hash
+                if not source.is_p2p or not info_hash:
+                    raise HTTPException(409, "Las fuentes directas no guardan archivos en este equipo")
             try:
                 result = purge_local_download(engine=_engine(request), settings=settings,
                                               source_id=source_id, info_hash=info_hash)
@@ -383,6 +410,9 @@ def create_app(
     @app.get("/api/sources/{source_id}/status", dependencies=[Depends(require_status_access)])
     async def source_status(request: Request, source_id: int) -> dict[str, Any]:
         info = await asyncio.to_thread(_load_source, source_id)
+        if not info["is_p2p"]:
+            return {"source_id": source_id, "state": "direct", "progress": 1.0, "playback_mode": "direct",
+                    "db_status": info["status"].value, "source_type": info["plan"].source_type}
         status = _engine(request).status(source_id)
         payload: dict[str, Any] = status.as_dict() if status else {"source_id": source_id, "state": "inactive"}
         payload["playback_mode"] = info["mode"].value
@@ -424,53 +454,80 @@ def create_app(
     # Nota: las dependencias locales van en ``dependencies=[...]``; con anotaciones diferidas
     # FastAPI no podría resolver ``Depends(require_play)`` dentro de la anotación del parámetro.
     @app.get("/player/{source_id}", response_class=HTMLResponse, dependencies=[Depends(require_play)])
-    async def player(request: Request, source_id: int, token: Annotated[str, Query()]) -> HTMLResponse:
-        info = await _ensure_running(request, source_id)
-        mode: PlaybackMode = info["mode"]
-        if mode is PlaybackMode.UNKNOWN:
-            task = asyncio.create_task(_probe_in_background(request, source_id))
-            background.add(task)
-            task.add_done_callback(background.discard)
-            mode = guess_mode_from_container(info["container"])
-            if mode is PlaybackMode.UNKNOWN:
-                mode = PlaybackMode.DIRECT
-        mime = MIME_BY_CONTAINER.get(info["container"] or "", "video/mp4")
-        if mime in ("video/x-matroska",):
-            mime = "video/webm"
+    async def player(
+        request: Request, source_id: int, token: Annotated[str, Query()], t: Annotated[float, Query(ge=0)] = 0.0,
+    ) -> HTMLResponse:
+        info = await _ensure_running(request, source_id, allow_direct=True)
+        plan = info["plan"]
         quoted = quote(token)
         claims = verify_token(secret, "play", token)  # ya validado por la dependencia; aquí se leen los datos
         user_id = int(claims.get("sub", 0))
-        with session_scope(factory) as session:
-            siblings = SourceRepository(session).list_for_movie(info["movie_id"], include_disabled=False)
-            alternatives = [
-                {
-                    "id": s.id,
-                    "label": " · ".join(x for x in (s.label, s.quality, s.audio_language) if x),
-                    "url": f"/player/{s.id}?token={quote(playback_token(secret, user_id=user_id, source_id=s.id, ttl_s=settings.playback_token_ttl_s))}",
-                    "current": s.id == source_id,
-                }
-                for s in siblings
-            ]
-        subtitles = list_subtitles(settings.data_dir / "subtitles", info["movie_id"])
+        if info["is_p2p"]:
+            mode: PlaybackMode = info["mode"]
+            if mode is PlaybackMode.UNKNOWN:
+                task = asyncio.create_task(_probe_in_background(request, source_id))
+                background.add(task)
+                task.add_done_callback(background.discard)
+                mode = guess_mode_from_container(info["container"])
+                if mode is PlaybackMode.UNKNOWN:
+                    mode = PlaybackMode.DIRECT
+            mime = MIME_BY_CONTAINER.get(info["container"] or "", "video/mp4")
+            if mime in ("video/x-matroska",):
+                mime = "video/webm"
+            mode_value = mode.value
+            stream_url = f"/stream/{source_id}?token={quoted}"
+            status_url: str | None = f"/api/sources/{source_id}/status?token={quoted}"
+        else:
+            mode_value, mime, stream_url, status_url = "external", plan.mime, plan.url, None
+
+        def alternatives() -> list[dict[str, Any]]:
+            with session_scope(factory) as session:
+                current = session.get(MediaSource, source_id)
+                siblings = SourceRepository(session).siblings(current) if current is not None else []
+                return [
+                    {
+                        "id": s.id,
+                        "label": s.label,
+                        "audio": s.audio_language or "Idioma sin especificar",
+                        "quality": s.quality or "Calidad sin especificar",
+                        "type": s.source_type,
+                        "p2p": s.is_p2p,
+                        "url": f"/player/{s.id}?token="
+                               + quote(playback_token(secret, user_id=user_id, source_id=s.id,
+                                                      ttl_s=settings.playback_token_ttl_s)),
+                        "current": s.id == source_id,
+                    }
+                    for s in siblings
+                ]
+
+        target = MediaTarget(info["movie_id"], info["episode_id"])
         config = {
             "sourceId": source_id,
-            "mode": mode.value,
-            "streamUrl": f"/stream/{source_id}?token={quoted}",
+            "mode": mode_value,
+            "sourceType": plan.source_type,
+            "isP2P": info["is_p2p"],
+            "streamUrl": stream_url,
             "remuxUrl": f"/remux/{source_id}?token={quoted}",
-            "statusUrl": f"/api/sources/{source_id}/status?token={quoted}",
+            "statusUrl": status_url,
             "mime": mime,
             "durationS": info["duration_s"],
-            "alternatives": alternatives,
-            "subtitles": subtitles,
+            "startAt": t,
+            "alternatives": await asyncio.to_thread(alternatives),
+            "subtitles": providers.local_subtitles.list_tracks(target),
         }
+        nonce = csp_nonce() or "rascal"
         page = player_template.safe_substitute(
             title=html.escape(f"{info['title']} · {info['label']}"),
             config_json=json.dumps(config).replace("</", "<\\/"),
+            nonce=nonce,
         )
-        csp = f"frame-ancestors 'self' {settings.ui_public_url}"
+        csp = content_security_policy(nonce, allow_http_media=settings.allow_insecure_stream_urls).replace(
+            "frame-ancestors 'self'", f"frame-ancestors 'self' {settings.ui_public_url}"
+        )
         return HTMLResponse(page, headers={"Content-Security-Policy": csp, "Cache-Control": "no-store"})
+
     from rascal.web import mount_web
-    mount_web(app, settings)
+    mount_web(app, settings, session_factory=factory)
     return app
     
 

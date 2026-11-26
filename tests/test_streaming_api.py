@@ -89,7 +89,11 @@ def test_player_page(client, settings, source_id) -> None:  # type: ignore[no-un
     page = client.get(f"/player/{source_id}", params={"token": token})
     assert page.status_code == 200 and "video.js" in page.text and '"mode": "direct"' in page.text
     assert f"/stream/{source_id}?token=" in page.text
-    assert page.headers["content-security-policy"] == "frame-ancestors 'self' http://localhost:8501"
+    # v2.2: CSP completa con nonce para el script inline; el iframe sigue limitado a la UI.
+    csp = page.headers["content-security-policy"]
+    assert "frame-ancestors 'self' http://localhost:8501" in csp
+    nonce = csp.split("'nonce-", 1)[1].split("'", 1)[0]
+    assert f'<script nonce="{nonce}">' in page.text and "object-src 'none'" in csp
     assert "$config_json" not in page.text
 
 

@@ -23,14 +23,14 @@ from rascal.auth.rbac import (
     require_movie_edit,
 )
 from rascal.config import Settings
-from rascal.data.enums import CreditRole, SourceKind, SourceStatus
-from rascal.data.models import MediaSource, Movie
+from rascal.data.enums import CreditRole, MediaType, SourceStatus
+from rascal.data.models import Episode, MediaSource, Movie, Season
 from rascal.data.repositories.catalog import CardQuery, CatalogRepository
 from rascal.data.repositories.media import AuditRepository, SourceRepository
-from rascal.domain.playback import guess_mode_from_container
 from rascal.domain.schemas import (
     CastInput,
     CrewInput,
+    DirectSourceForm,
     MagnetSourceForm,
     MovieCard,
     MovieForm,
@@ -41,8 +41,7 @@ from rascal.domain.schemas import (
 )
 from rascal.domain.slugs import movie_slug_base
 from rascal.domain.ratings import to_stars
-from rascal.torrents.ingest import InvalidTorrent, inspect_torrent
-from rascal.torrents.magnet import InvalidMagnet, parse_magnet
+from rascal.providers import PreparedSource, ProviderError, build_registry
 
 _SCALAR_FIELDS = (
     "title",
@@ -58,6 +57,7 @@ _SCALAR_FIELDS = (
     "imdb_id",
     "tmdb_id",
     "is_published",
+    "media_type",
 )
 
 
@@ -81,6 +81,7 @@ class CatalogService:
         self.catalog = CatalogRepository(session)
         self.sources = SourceRepository(session)
         self.audit = AuditRepository(session)
+        self.providers = build_registry(settings)
 
     # ── Películas ────────────────────────────────────────────────────────────
     def create_movie(self, form: MovieForm, *, owner_id: int | None = None) -> int:
@@ -118,6 +119,10 @@ class CatalogService:
         movie = self._get_movie(movie_id)
         actor = require_movie_edit(self.principal, movie.owner_id)
         self._check_external_ids(form, exclude_id=movie.id)
+        if movie.media_type is MediaType.SERIES and form.media_type is MediaType.MOVIE:
+            has_seasons = self.session.scalar(select(Season.id).where(Season.series_id == movie.id).limit(1))
+            if has_seasons is not None:
+                raise CatalogError("Esta serie tiene temporadas: elimínalas antes de convertirla en película")
 
         changes: dict[str, Any] = {}
         for field, value in self._scalars(form).items():
@@ -204,77 +209,83 @@ class CatalogService:
         )
         cards = [
             MovieCard(
-                id=r.id, slug=r.slug, title=r.title, release_year=r.release_year, poster_path=r.poster_path,
+                id=r.id, slug=r.slug, title=r.title, media_type=r.media_type, release_year=r.release_year,
+                poster_path=r.poster_path,
                 average=r.average, average_stars=to_stars(r.average), review_count=r.review_count,
-                watchlist_count=r.watchlist_count,
+                watchlist_count=r.watchlist_count, is_published=r.is_published,
             )
             for r in rows
         ]
         return cards, total
 
-    # ── Fuentes P2P ──────────────────────────────────────────────────────────
-    def list_sources(self, movie_id: int) -> list[SourceView]:
+    # ── Fuentes (P2P y directas) ─────────────────────────────────────────────
+    def list_sources(self, movie_id: int, *, episode_id: int | None = None, all_episodes: bool = False) -> list[SourceView]:
+        """Fuentes de la película (``episode_id=None``) o de un capítulo concreto."""
         movie = self._get_movie(movie_id)
         self._require_sources(movie)
-        return [source_view(s) for s in self.sources.list_for_movie(movie.id)]
+        return [
+            source_view(s)
+            for s in self.sources.list_for_movie(movie.id)
+            if all_episodes or s.episode_id == episode_id
+        ]
 
-    def add_magnet_source(self, movie_id: int, form: MagnetSourceForm) -> SourceView:
+    def add_magnet_source(self, movie_id: int, form: MagnetSourceForm, *, episode_id: int | None = None) -> SourceView:
+        prepared = self._prepare(lambda: self.providers.p2p.prepare_magnet(form.magnet_uri))
+        return self._add_source(movie_id, episode_id, prepared, form, action="source.add_magnet")
+
+    def add_torrent_source(
+        self, movie_id: int, form: TorrentSourceForm, data: bytes, *, episode_id: int | None = None
+    ) -> SourceView:
+        prepared = self._prepare(
+            lambda: self.providers.p2p.prepare_torrent(data, max_bytes=self.settings.max_torrent_file_bytes)
+        )
+        extra = {"files": prepared.values.get("_files"), "private": prepared.values.get("_private")}
+        return self._add_source(movie_id, episode_id, prepared, form, action="source.add_torrent", extra=extra)
+
+    def add_direct_source(self, movie_id: int, form: DirectSourceForm, *, episode_id: int | None = None) -> SourceView:
+        """URL directa o HLS: se reproduce en el navegador sin pasar por libtorrent."""
+        declared = None if form.source_type == "auto" else form.source_type
+        prepared = self._prepare(lambda: self.providers.direct.prepare(form.stream_url, declared=declared))
+        return self._add_source(movie_id, episode_id, prepared, form, action="source.add_direct")
+
+    def _prepare(self, build: Any) -> PreparedSource:
+        try:
+            return build()
+        except ProviderError as exc:
+            raise CatalogError(str(exc)) from exc
+
+    def _add_source(
+        self,
+        movie_id: int,
+        episode_id: int | None,
+        prepared: PreparedSource,
+        form: Any,
+        *,
+        action: str,
+        extra: dict[str, Any] | None = None,
+    ) -> SourceView:
         movie = self._get_movie(movie_id)
         actor = self._require_sources(movie)
-        try:
-            magnet = parse_magnet(form.magnet_uri)
-        except InvalidMagnet as exc:
-            raise CatalogError(str(exc)) from exc
-        self._ensure_new_source(movie.id, magnet.info_hash)
+        if episode_id is not None:
+            self._require_episode_of(movie, episode_id)
+        elif movie.media_type is MediaType.SERIES:
+            raise CatalogError("En una serie, las fuentes se añaden a cada capítulo")
+        self._ensure_new_source(movie.id, prepared)
+        values = {k: v for k, v in prepared.values.items() if not k.startswith("_")}
         source = self.sources.add(
             MediaSource(
                 movie_id=movie.id,
-                kind=SourceKind.MAGNET,
+                episode_id=episode_id,
+                kind=prepared.kind,
                 label=form.label,
                 audio_language=form.audio_language,
                 quality=form.quality,
-                magnet_uri=magnet.canonical(),
-                info_hash=magnet.info_hash,
-                display_name=magnet.display_name,
                 rights_statement=form.rights_statement,
                 added_by_id=actor.user_id,
+                **values,
             )
         )
-        self._audit_source(actor, "source.add_magnet", source)
-        return source_view(source)
-
-    def add_torrent_source(self, movie_id: int, form: TorrentSourceForm, data: bytes) -> SourceView:
-        movie = self._get_movie(movie_id)
-        actor = self._require_sources(movie)
-        try:
-            meta = inspect_torrent(data, max_bytes=self.settings.max_torrent_file_bytes)
-        except InvalidTorrent as exc:
-            raise CatalogError(str(exc)) from exc
-        primary = meta.primary_video()
-        if primary is None:
-            raise CatalogError("El torrent no contiene archivos de video reproducibles (mp4, mkv, webm, …)")
-        self._ensure_new_source(movie.id, meta.info_hash)
-        source = self.sources.add(
-            MediaSource(
-                movie_id=movie.id,
-                kind=SourceKind.TORRENT_FILE,
-                label=form.label,
-                audio_language=form.audio_language,
-                quality=form.quality,
-                torrent_data=data,
-                info_hash=meta.info_hash,
-                display_name=meta.name,
-                total_size=meta.total_size,
-                file_index=primary.index,
-                file_path=primary.path,
-                file_size=primary.size,
-                container=primary.container,
-                playback_mode=guess_mode_from_container(primary.container),
-                rights_statement=form.rights_statement,
-                added_by_id=actor.user_id,
-            )
-        )
-        self._audit_source(actor, "source.add_torrent", source, extra={"files": len(meta.files), "private": meta.private})
+        self._audit_source(actor, action, source, extra=extra)
         return source_view(source)
 
     def update_source(
@@ -335,9 +346,18 @@ class CatalogService:
         assert self.principal is not None
         return self.principal
 
-    def _ensure_new_source(self, movie_id: int, info_hash: str) -> None:
-        if self.sources.exists_for_movie(movie_id, info_hash):
-            raise CatalogError("Esta fuente (mismo info-hash) ya está vinculada a la película")
+    def _ensure_new_source(self, movie_id: int, prepared: PreparedSource) -> None:
+        if prepared.kind.is_p2p:
+            if self.sources.exists_for_movie(movie_id, prepared.dedupe_key):
+                raise CatalogError("Esta fuente (mismo info-hash) ya está vinculada a este título")
+        elif self.sources.url_exists_for_movie(movie_id, prepared.dedupe_key):
+            raise CatalogError("Este enlace ya está vinculado a este título")
+
+    def _require_episode_of(self, movie: Movie, episode_id: int) -> Episode:
+        episode = self.session.get(Episode, episode_id)
+        if episode is None or episode.season.series_id != movie.id:
+            raise NotFound("Capítulo no encontrado en esta serie")
+        return episode
 
     def _audit_source(self, actor: Principal, action: str, source: MediaSource, extra: dict[str, Any] | None = None) -> None:
         self.audit.record(
@@ -345,7 +365,14 @@ class CatalogService:
             action=action,
             entity_type="media_source",
             entity_id=source.id,
-            payload={"movie_id": source.movie_id, "info_hash": source.info_hash, **(extra or {})},
+            payload={
+                "movie_id": source.movie_id,
+                "episode_id": source.episode_id,
+                "source_type": source.source_type,
+                "info_hash": source.info_hash,
+                "url_hash": source.url_hash,
+                **(extra or {}),
+            },
         )
 
     @staticmethod
@@ -357,10 +384,12 @@ class CatalogService:
             if value is None:
                 continue
             stmt = select(Movie.id).where(column == value)
+            if column is Movie.tmdb_id:  # TMDB numera películas y series por separado
+                stmt = stmt.where(Movie.media_type == form.media_type)
             if exclude_id is not None:
                 stmt = stmt.where(Movie.id != exclude_id)
             if self.session.scalar(stmt) is not None:
-                raise CatalogError(f"Ya existe otra película con ese id de {label}")
+                raise CatalogError(f"Ya existe otro título con ese id de {label}")
 
     def _resolve_person(self, person: PersonInput) -> int:
         if person.id is not None:

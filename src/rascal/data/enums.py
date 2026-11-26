@@ -31,9 +31,42 @@ class ColorKind(StrEnum):
     MIXED = "mixed"
 
 
+class MediaType(StrEnum):
+    """Tipo de título del catálogo: las series comparten tabla con las películas."""
+
+    MOVIE = "movie"
+    SERIES = "series"
+
+
 class SourceKind(StrEnum):
+    """Cómo se obtiene el video. Las dos primeras pasan por libtorrent; las dos últimas no."""
+
     MAGNET = "magnet"
     TORRENT_FILE = "torrent_file"
+    DIRECT_URL = "direct_url"  # MP4/WebM/MKV por HTTPS (CDN propio, enlace Debrid…)
+    HLS = "hls"  # lista .m3u8
+
+    @property
+    def is_p2p(self) -> bool:
+        return self in (SourceKind.MAGNET, SourceKind.TORRENT_FILE)
+
+    @property
+    def source_type(self) -> str:
+        """Nombre público estilo Stremio: torrent | magnet | direct_url | hls."""
+        return "torrent" if self is SourceKind.TORRENT_FILE else self.value
+
+
+P2P_KINDS = (SourceKind.MAGNET, SourceKind.TORRENT_FILE)
+DIRECT_KINDS = (SourceKind.DIRECT_URL, SourceKind.HLS)
+
+
+class OfferType(StrEnum):
+    """Modalidad de una plataforma oficial en "Dónde ver"."""
+
+    SUBSCRIPTION = "subscription"
+    RENT = "rent"
+    BUY = "buy"
+    FREE = "free"
 
 
 class SourceStatus(StrEnum):

@@ -1,0 +1,58 @@
+# /etc/systemd/system/rascal-cinema.service
+# Rascal Cinema detrás de Nginx: un único proceso uvicorn en 127.0.0.1:8001 (RASCAL_HOST/RASCAL_PORT).
+#
+#   sudo cp deploy/linux/rascal-cinema.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rascal-cinema
+#   journalctl -u rascal-cinema -f
+[Unit]
+Description=Rascal Cinema (FastAPI + streaming P2P/HTTPS)
+Documentation=file:///srv/rascal/app/docs/DEPLOY_LINUX.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rascal
+Group=rascal
+WorkingDirectory=/srv/rascal/app
+# Secretos y configuración fuera del repositorio, legibles sólo por root y el servicio (chmod 640, root:rascal).
+EnvironmentFile=/etc/rascal/rascal.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/srv/rascal/venv/bin/alembic upgrade head
+ExecStart=/srv/rascal/venv/bin/python scripts/serve.py
+# Apagado ordenado: el lifespan guarda el resume data de libtorrent antes de salir.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+
+# ── Endurecimiento (systemd.exec) ───────────────────────────────────────────
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+# Sólo puede escribir en sus datos (BD SQLite, descargas, subtítulos, avatares, resume data).
+ReadWritePaths=/srv/rascal/var
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+UMask=0027
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

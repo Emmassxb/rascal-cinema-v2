@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 UI_ENTRY = ROOT / "src" / "rascal" / "ui" / "app.py"
 
 
@@ -26,10 +27,17 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _raise_interrupt)
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT / "src"), env.get("PYTHONPATH")]))
-    port = env.get("RASCAL_STREAMER_PORT", "8001")
+    # v2.2: host/puerto desde RASCAL_HOST / RASCAL_PORT (o .env). Por defecto sólo loopback:
+    # antes escuchaba en 0.0.0.0 y quedaba expuesto en la red sin proxy ni TLS.
+    from rascal.config import get_settings
+
+    settings = get_settings()
+    host = env.get("RASCAL_HOST", settings.host)
+    port = env.get("RASCAL_PORT", env.get("RASCAL_STREAMER_PORT", str(settings.port)))
     commands = {
         "streamer": [sys.executable, "-m", "uvicorn", "rascal.streaming.api:create_app", "--factory",
-                     "--host", "0.0.0.0", "--port", port, "--workers", "1"],
+                     "--host", host, "--port", port, "--workers", "1", "--proxy-headers",
+                     "--forwarded-allow-ips", settings.trusted_proxies],
     }
     if UI_ENTRY.exists():
         commands["ui"] = [sys.executable, "-m", "streamlit", "run", str(UI_ENTRY), "--server.port",

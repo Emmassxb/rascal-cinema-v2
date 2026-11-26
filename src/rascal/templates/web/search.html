@@ -8,10 +8,10 @@
 {% else %}
   <div class="panel">
     {% for h in hits %}
-      {% set href = '/movie/' + h.slug if h.kind == 'movie' else ('/person/' + h.slug if h.kind == 'person' else ('/company/' + h.slug if h.kind == 'company' else ('/genre/' + h.slug if h.kind == 'genre' else '/user/' + h.slug))) %}
+      {% set href = '/movie/' + h.slug if h.kind in ('movie', 'series') else ('/person/' + h.slug if h.kind == 'person' else ('/company/' + h.slug if h.kind == 'company' else ('/genre/' + h.slug if h.kind == 'genre' else '/user/' + h.slug))) %}
       <div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
         <div>
-          <span class="badge" style="margin-right:8px;">{{ h.kind }}</span>
+          <span class="badge" style="margin-right:8px;">{{ {'movie': 'película', 'series': 'serie', 'person': 'persona', 'company': 'productora', 'genre': 'género', 'user': 'usuario'}.get(h.kind, h.kind) }}</span>
           <a href="{{ href }}" style="font-weight:700;font-size:1rem;">{{ h.title }}</a>
           {% if h.subtitle %}<span style="color:var(--muted);font-size:0.85rem;margin-left:8px;">{{ h.subtitle }}</span>{% endif %}
         </div>

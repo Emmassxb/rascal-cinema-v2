@@ -1,27 +1,61 @@
 {% extends "base.html" %}
-{% from "macros.html" import movie_grid %}
+{% from "macros.html" import movie_grid, pagination %}
 {% block content %}
+{% set k_val = prof.ref.kind.value if prof.ref.kind.value is defined else prof.ref.kind %}
+{% set kind_label = {'person': 'Persona', 'company': 'Productora', 'genre': 'Género'}.get(k_val, k_val) %}
 <div class="panel">
-  <span class="badge">{{ prof.ref.kind.value if prof.ref.kind.value is defined else prof.ref.kind }}</span>
-  <h1 style="margin:6px 0;">{{ prof.ref.name }}</h1>
-  {% if prof.country %}<div style="color:var(--muted);">País: {{ prof.country }}</div>{% endif %}
-  {% if prof.description %}<p>{{ prof.description }}</p>{% endif %}
+  {% if k_val == 'person' %}
+    <div class="person-head">
+      <div>
+        {% if media_url(prof.image_path) %}
+          <img class="person-photo" src="{{ media_url(prof.image_path) }}" alt="Fotografía de {{ prof.ref.name }}">
+        {% else %}
+          <div class="person-photo poster-fallback" style="display:flex;align-items:center;justify-content:center;">{{ prof.ref.name }}</div>
+        {% endif %}
+        {% if prof.can_edit %}
+          <a class="btn btn-secondary btn-block" style="margin-top:10px;" href="/partner/person/{{ prof.ref.id }}?back=/person/{{ prof.ref.slug }}">✎ Editar bio</a>
+        {% endif %}
+      </div>
+      <div>
+        <h1 style="margin:0 0 4px;">{{ prof.ref.name }}</h1>
+        {% if prof.known_for_department %}<div class="muted">{{ prof.known_for_department }}</div>{% endif %}
+        {% if prof.birth_date or prof.place_of_birth or prof.death_date %}
+          <dl class="facts">
+            {% if prof.birth_date %}<dt>Nacimiento</dt><dd>{{ prof.birth_date.strftime('%d/%m/%Y') }}</dd>{% endif %}
+            {% if prof.place_of_birth %}<dt>Lugar</dt><dd>{{ prof.place_of_birth }}</dd>{% endif %}
+            {% if prof.death_date %}<dt>Fallecimiento</dt><dd>{{ prof.death_date.strftime('%d/%m/%Y') }}</dd>{% endif %}
+          </dl>
+        {% endif %}
+        {% if prof.description %}
+          <div class="bio-text">{{ prof.description }}</div>
+        {% else %}
+          <p class="muted">Todavía no hay biografía.{% if prof.can_edit %} Puedes escribirla o importarla de TMDB con «Editar bio».{% endif %}</p>
+        {% endif %}
+        {% if prof.tmdb_id %}<p class="small"><a href="https://www.themoviedb.org/person/{{ prof.tmdb_id }}" target="_blank" rel="noopener noreferrer">Ver en TMDB</a></p>{% endif %}
+      </div>
+    </div>
+  {% else %}
+    <span class="badge">{{ kind_label }}</span>
+    <h1 style="margin:6px 0;">{{ prof.ref.name }}</h1>
+    {% if prof.country %}<div style="color:var(--muted);">País: {{ prof.country }}</div>{% endif %}
+    {% if prof.description %}<p class="bio-text">{{ prof.description }}</p>{% endif %}
+  {% endif %}
   <div class="stats-row">
-    <div class="stat-box"><div class="num">{{ prof.metrics.films }}</div><div class="lbl">Películas</div></div>
+    <div class="stat-box"><div class="num">{{ prof.metrics.films }}</div><div class="lbl">Títulos</div></div>
     <div class="stat-box"><div class="num" style="color:var(--green);">{{ '%.2f'|format(prof.metrics.average_stars) if prof.metrics.average_stars else '—' }} ★</div><div class="lbl">Promedio</div></div>
     <div class="stat-box"><div class="num">{{ prof.metrics.total_reviews }}</div><div class="lbl">Reseñas</div></div>
     <div class="stat-box"><div class="num">{{ '%.1f'|format(prof.metrics.popularity_score) }}</div><div class="lbl">Popularidad</div></div>
   </div>
-  {% set k_val = prof.ref.kind.value if prof.ref.kind.value is defined else prof.ref.kind %}
   {% if prof.roles %}
     <div style="margin-top:8px;">
-      <a class="pill" href="/{{ k_val }}/{{ prof.ref.slug }}">Todos ({{ prof.filmography_total }})</a>
+      <a class="pill" href="/{{ k_val }}/{{ prof.ref.slug }}">Todos</a>
       {% for rc in prof.roles %}
         <a class="pill" href="/{{ k_val }}/{{ prof.ref.slug }}?role={{ rc.role.value }}">{{ rc.role.value }} ({{ rc.films }})</a>
       {% endfor %}
     </div>
   {% endif %}
 </div>
-<h2 class="section-title">Filmografía ({{ prof.filmography|length }})</h2>
+<h2 class="section-title">Filmografía en la plataforma ({{ prof.filmography_total }})</h2>
 {{ movie_grid(prof.filmography) }}
+{{ pagination(pager, page_base) }}
 {% endblock %}

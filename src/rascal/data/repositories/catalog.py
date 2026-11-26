@@ -12,18 +12,17 @@ from typing import Any, TypeVar
 
 from sqlalchemy import Select, and_, case, func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, defer, joinedload, selectinload
 
-from rascal.data.enums import CreditRole
+from rascal.data.enums import CreditRole, MediaType
 from rascal.data.models import (
     Company,
     Genre,
+    MediaSource,
     Movie,
     MovieCredit,
     MovieTechSpecs,
     Person,
-    Review,
-    WatchlistEntry,
     movie_companies,
     movie_genres,
 )
@@ -45,6 +44,24 @@ class MovieCardRow:
     average: float | None
     review_count: int
     watchlist_count: int
+    media_type: MediaType = MediaType.MOVIE
+    is_published: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class SearchRow:
+    """Proyección mínima para resultados de búsqueda (sin sinopsis ni biografías)."""
+
+    id: int
+    slug: str
+    name: str
+    image_path: str | None
+    year: int | None = None
+    films: int = 0
+    media_type: MediaType | None = None
+
+
+MAX_PAGE_SIZE = 200  # ninguna consulta de listado devuelve más filas que esto
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,11 +76,13 @@ class CardQuery:
     owner_id: int | None = None
     title_contains: str | None = None
     include_unpublished: bool = False
+    media_type: MediaType | None = None
     sort: str = "popularity"  # popularity | rating | weighted | year_desc | year_asc | title | recent
     prior_mean: float = 6.0  # media bayesiana (sort="weighted"), escala 0–10
     prior_weight: int = 5
     limit: int = 60
     offset: int = 0
+    with_total: bool = True  # False en carruseles: ahorra el COUNT(*) sobre el catálogo
 
 
 class CatalogRepository:
@@ -78,13 +97,15 @@ class CatalogRepository:
         return self.session.scalars(select(Movie).where(Movie.slug == slug)).first()
 
     def load_movie_full(self, *, movie_id: int | None = None, slug: str | None = None) -> Movie | None:
-        """Película con todas sus relaciones en 5 consultas fijas (selectin), sin N+1."""
+        """Película con sus relaciones en consultas fijas (selectin), sin N+1.
+
+        Las fuentes NO se cargan aquí (una serie puede tener miles, y ``torrent_data`` es un
+        BLOB): ver ``title_sources``. La biografía de las personas tampoco (``defer``)."""
         stmt = select(Movie).options(
             selectinload(Movie.genres),
             selectinload(Movie.companies),
-            selectinload(Movie.credits).joinedload(MovieCredit.person),
+            selectinload(Movie.credits).joinedload(MovieCredit.person).defer(Person.bio),
             joinedload(Movie.tech_specs),
-            selectinload(Movie.sources),
         )
         if movie_id is not None:
             stmt = stmt.where(Movie.id == movie_id)
@@ -93,6 +114,18 @@ class CatalogRepository:
         else:
             raise ValueError("movie_id o slug requerido")
         return self.session.scalars(stmt).unique().first()
+
+    def title_sources(self, movie_id: int, *, episode_id: int | None = None) -> list[MediaSource]:
+        """Fuentes de la película (o de un capítulo) sin cargar el BLOB del .torrent."""
+        stmt = (
+            select(MediaSource)
+            .options(defer(MediaSource.torrent_data))
+            .where(MediaSource.movie_id == movie_id)
+            .order_by(MediaSource.created_at, MediaSource.id)
+            .limit(MAX_PAGE_SIZE)
+        )
+        stmt = stmt.where(MediaSource.episode_id.is_(None) if episode_id is None else MediaSource.episode_id == episode_id)
+        return list(self.session.scalars(stmt))
 
     def add_movie(self, movie: Movie) -> Movie:
         self.session.add(movie)
@@ -218,42 +251,23 @@ class CatalogRepository:
             return select(movie_genres.c.movie_id).where(movie_genres.c.genre_id == entity_id)
         raise ValueError(f"Tipo de entidad desconocido: {kind}")
 
-    # ── Agregados por película (subconsultas reutilizables) ─────────────────
-    @staticmethod
-    def review_aggregates_subquery() -> Any:
-        return (
-            select(
-                Review.movie_id.label("movie_id"),
-                func.avg(Review.rating).label("avg_rating"),
-                func.count(Review.id).label("review_count"),
-                func.count(Review.rating).label("rated_count"),
-            )
-            .group_by(Review.movie_id)
-            .subquery("review_agg")
-        )
-
-    @staticmethod
-    def watchlist_aggregates_subquery() -> Any:
-        return (
-            select(WatchlistEntry.movie_id.label("movie_id"), func.count().label("watchlist_count"))
-            .group_by(WatchlistEntry.movie_id)
-            .subquery("watch_agg")
-        )
-
+    # ── Listados de tarjetas ────────────────────────────────────────────────
     def movie_cards(self, query: CardQuery) -> tuple[list[MovieCardRow], int]:
-        """Listado filtrable/ordenable de películas con métricas en UNA consulta + conteo."""
-        reviews = self.review_aggregates_subquery()
-        watch = self.watchlist_aggregates_subquery()
-        review_count = func.coalesce(reviews.c.review_count, 0)
-        rated_count = func.coalesce(reviews.c.rated_count, 0)
-        watch_count = func.coalesce(watch.c.watchlist_count, 0)
-        weighted = (
-            rated_count * func.coalesce(reviews.c.avg_rating, query.prior_mean) + query.prior_weight * query.prior_mean
-        ) / (rated_count + query.prior_weight)
+        """Listado filtrable/ordenable con métricas en UNA consulta + un conteo.
+
+        Lee los agregados desnormalizados de ``movies`` (ver ``rascal.data.stats``) y proyecta
+        sólo las columnas de la tarjeta. Nunca devuelve más de ``MAX_PAGE_SIZE`` filas.
+        """
+        rated = Movie.rating_count
+        weighted = (rated * func.coalesce(Movie.rating_avg, query.prior_mean) + query.prior_weight * query.prior_mean) / (
+            rated + query.prior_weight
+        )
 
         conditions: list[Any] = []
         if not query.include_unpublished:
             conditions.append(Movie.is_published.is_(True))
+        if query.media_type is not None:
+            conditions.append(Movie.media_type == query.media_type)
         if query.movie_ids is not None:
             conditions.append(Movie.id.in_(query.movie_ids))
         if query.genre_slug:
@@ -269,116 +283,96 @@ class CatalogRepository:
         if query.year_to is not None:
             conditions.append(Movie.release_year <= query.year_to)
         if query.min_average is not None:
-            conditions.append(reviews.c.avg_rating >= query.min_average)
+            conditions.append(Movie.rating_avg >= query.min_average)
         if query.owner_id is not None:
             conditions.append(Movie.owner_id == query.owner_id)
         if query.title_contains:
             conditions.append(Movie.title.icontains(query.title_contains, autoescape=True))
+        if query.sort == "weighted":
+            # «Mejor valoradas»: sólo títulos con al menos una calificación. Sin esto, la expresión
+            # bayesiana se evaluaría sobre los 86 000 títulos en cada carga del inicio.
+            conditions.append(Movie.rating_count > 0)
 
         order_by: list[Any] = {
-            "popularity": [(review_count + watch_count).desc(), Movie.title],
-            "rating": [
-                case((reviews.c.avg_rating.is_(None), 1), else_=0),
-                reviews.c.avg_rating.desc(),
-                review_count.desc(),
-            ],
-            "weighted": [weighted.desc(), review_count.desc()],
+            "popularity": [Movie.popularity.desc(), Movie.title],
+            "rating": [case((Movie.rating_avg.is_(None), 1), else_=0), Movie.rating_avg.desc(), Movie.review_count.desc()],
+            "weighted": [weighted.desc(), Movie.review_count.desc()],
             "year_desc": [case((Movie.release_year.is_(None), 1), else_=0), Movie.release_year.desc(), Movie.title],
             "year_asc": [case((Movie.release_year.is_(None), 1), else_=0), Movie.release_year.asc(), Movie.title],
             "title": [Movie.title],
             "recent": [Movie.created_at.desc()],
         }.get(query.sort, [Movie.title])
 
-        base = (
-            select(Movie.id)
-            .outerjoin(reviews, reviews.c.movie_id == Movie.id)
-            .outerjoin(watch, watch.c.movie_id == Movie.id)
-            .where(*conditions)
-        )
-        total = int(self.session.scalar(select(func.count()).select_from(base.subquery())) or 0)
-
+        total = int(self.session.scalar(select(func.count(Movie.id)).where(*conditions)) or 0) if query.with_total else -1
+        limit = max(1, min(query.limit, MAX_PAGE_SIZE))
         stmt = (
             select(
-                Movie.id,
-                Movie.slug,
-                Movie.title,
-                Movie.release_year,
-                Movie.poster_path,
-                reviews.c.avg_rating,
-                review_count,
-                watch_count,
+                Movie.id, Movie.slug, Movie.title, Movie.release_year, Movie.poster_path,
+                Movie.rating_avg, Movie.review_count, Movie.watchlist_count, Movie.media_type, Movie.is_published,
             )
-            .outerjoin(reviews, reviews.c.movie_id == Movie.id)
-            .outerjoin(watch, watch.c.movie_id == Movie.id)
             .where(*conditions)
             .order_by(*order_by, Movie.id)
-            .limit(query.limit)
-            .offset(query.offset)
+            .limit(limit)
+            .offset(max(0, query.offset))
         )
         rows = [
             MovieCardRow(
-                id=r[0],
-                slug=r[1],
-                title=r[2],
-                release_year=r[3],
-                poster_path=r[4],
+                id=r[0], slug=r[1], title=r[2], release_year=r[3], poster_path=r[4],
                 average=round(float(r[5]), 2) if r[5] is not None else None,
-                review_count=int(r[6]),
-                watchlist_count=int(r[7]),
+                review_count=int(r[6] or 0), watchlist_count=int(r[7] or 0), media_type=r[8], is_published=bool(r[9]),
             )
             for r in self.session.execute(stmt)
         ]
         return rows, total
 
     # ── Búsqueda (ILIKE escapado; en PostgreSQL acelerar con pg_trgm) ───────
-    def search_movies(self, q: str, limit: int) -> list[Movie]:
-        return list(
-            self.session.scalars(
-                select(Movie)
-                .where(Movie.is_published.is_(True), Movie.title.icontains(q, autoescape=True))
-                .order_by(Movie.release_year.desc(), Movie.title)
-                .limit(limit)
-            )
+    def search_movies(self, q: str, limit: int) -> list[SearchRow]:
+        rows = self.session.execute(
+            select(Movie.id, Movie.slug, Movie.title, Movie.poster_path, Movie.release_year, Movie.media_type)
+            .where(Movie.is_published.is_(True), Movie.title.icontains(q, autoescape=True))
+            .order_by(Movie.popularity.desc(), Movie.release_year.desc(), Movie.title)
+            .limit(min(limit, MAX_PAGE_SIZE))
         )
+        return [SearchRow(id=r[0], slug=r[1], name=r[2], image_path=r[3], year=r[4], media_type=r[5]) for r in rows]
 
-    def search_people(self, q: str, limit: int, role: CreditRole | None = None) -> list[tuple[Person, int]]:
+    def search_people(self, q: str, limit: int, role: CreditRole | None = None) -> list[SearchRow]:
         credit_filter = [MovieCredit.person_id == Person.id]
         if role is not None:
             credit_filter.append(MovieCredit.role == role)
         films = func.count(func.distinct(MovieCredit.movie_id))
         stmt = (
-            select(Person, films)
+            select(Person.id, Person.slug, Person.name, Person.photo_path, films)
             .join(MovieCredit, and_(*credit_filter))
             .where(Person.name.icontains(q, autoescape=True))
-            .group_by(Person.id)
+            .group_by(Person.id, Person.slug, Person.name, Person.photo_path)
             .order_by(films.desc(), Person.name)
-            .limit(limit)
+            .limit(min(limit, MAX_PAGE_SIZE))
         )
-        return [(person, int(count)) for person, count in self.session.execute(stmt)]
+        return [SearchRow(id=r[0], slug=r[1], name=r[2], image_path=r[3], films=int(r[4])) for r in self.session.execute(stmt)]
 
-    def search_companies(self, q: str, limit: int) -> list[tuple[Company, int]]:
+    def search_companies(self, q: str, limit: int) -> list[SearchRow]:
         films = func.count(movie_companies.c.movie_id)
         stmt = (
-            select(Company, films)
+            select(Company.id, Company.slug, Company.name, Company.logo_path, films)
             .outerjoin(movie_companies, movie_companies.c.company_id == Company.id)
             .where(Company.name.icontains(q, autoescape=True))
-            .group_by(Company.id)
+            .group_by(Company.id, Company.slug, Company.name, Company.logo_path)
             .order_by(films.desc(), Company.name)
-            .limit(limit)
+            .limit(min(limit, MAX_PAGE_SIZE))
         )
-        return [(company, int(count)) for company, count in self.session.execute(stmt)]
+        return [SearchRow(id=r[0], slug=r[1], name=r[2], image_path=r[3], films=int(r[4])) for r in self.session.execute(stmt)]
 
-    def search_genres(self, q: str, limit: int) -> list[tuple[Genre, int]]:
+    def search_genres(self, q: str, limit: int) -> list[SearchRow]:
         films = func.count(movie_genres.c.movie_id)
         stmt = (
-            select(Genre, films)
+            select(Genre.id, Genre.slug, Genre.name, films)
             .outerjoin(movie_genres, movie_genres.c.genre_id == Genre.id)
             .where(Genre.name.icontains(q, autoescape=True))
-            .group_by(Genre.id)
+            .group_by(Genre.id, Genre.slug, Genre.name)
             .order_by(films.desc(), Genre.name)
-            .limit(limit)
+            .limit(min(limit, MAX_PAGE_SIZE))
         )
-        return [(genre, int(count)) for genre, count in self.session.execute(stmt)]
+        return [SearchRow(id=r[0], slug=r[1], name=r[2], image_path=None, films=int(r[3])) for r in self.session.execute(stmt)]
 
     def all_genres(self) -> list[Genre]:
         return list(self.session.scalars(select(Genre).order_by(Genre.name)))

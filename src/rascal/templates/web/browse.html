@@ -1,8 +1,16 @@
 {% extends "base.html" %}
-{% from "macros.html" import movie_grid %}
+{% from "macros.html" import movie_grid, pagination %}
 {% block content %}
-<h1>Catálogo de Películas</h1>
+<h1>{{ 'Series' if media_type == 'series' else ('Películas' if media_type == 'movie' else 'Catálogo') }}</h1>
 <form class="panel form-grid" method="get" action="/browse">
+  <div>
+    <label>Tipo</label>
+    <select name="type">
+      <option value="" {{ 'selected' if not media_type else '' }}>Películas y series</option>
+      <option value="movie" {{ 'selected' if media_type == 'movie' else '' }}>Sólo películas</option>
+      <option value="series" {{ 'selected' if media_type == 'series' else '' }}>Sólo series</option>
+    </select>
+  </div>
   <div>
     <label>Género</label>
     <select name="genre">
@@ -37,5 +45,7 @@
     <button class="btn" type="submit" style="width:100%;">Filtrar</button>
   </div>
 </form>
+<p class="muted small">{{ pager.total }} títulos</p>
 {{ movie_grid(cards) }}
+{{ pagination(pager, page_base) }}
 {% endblock %}

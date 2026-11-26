@@ -1,7 +1,8 @@
 """Subtítulos: conversión a WebVTT, guardado seguro y listado por película.
 
-Los archivos viven en ``<data_dir>/subtitles/<movie_id>/<Etiqueta>.vtt``. El navegador los
-consume a través de ``/subtitles/<movie_id>/<archivo>``, así que el nombre se sanea aquí
+Los archivos viven en ``<data_dir>/subtitles/<movie_id>/<Etiqueta>.vtt`` (películas) y en
+``<data_dir>/subtitles/episodes/<episode_id>/`` (capítulos). El navegador los consume a través
+de ``/subtitles/<movie_id>/<archivo>`` y ``/subtitles/episode/<episode_id>/<archivo>``, así que el nombre se sanea aquí
 para que nunca contenga separadores de ruta ni caracteres raros.
 """
 
@@ -67,23 +68,26 @@ def srclang_for(label: str) -> str:
     return "und"
 
 
-def save_subtitle(base_dir: Path, movie_id: int, raw: bytes, label: str) -> str:
-    """Guarda el subtítulo ya convertido y devuelve el nombre de archivo resultante."""
+def episode_folder(base_dir: Path, episode_id: int) -> Path:
+    """Carpeta de los subtítulos de un capítulo: ``<base>/episodes/<episode_id>/``."""
+    return Path(base_dir) / "episodes" / str(int(episode_id))
+
+
+def save_subtitle_in(folder: Path, raw: bytes, label: str) -> str:
+    """Valida, convierte a WebVTT y guarda en ``folder``. Devuelve el nombre de archivo."""
     if not raw:
         raise SubtitleError("El archivo de subtítulos está vacío.")
     if len(raw) > MAX_SUBTITLE_BYTES:
         raise SubtitleError("El subtítulo supera el máximo de 2 MB.")
     vtt = to_webvtt(decode_text(raw))
-    folder = Path(base_dir) / str(int(movie_id))
     folder.mkdir(parents=True, exist_ok=True)
     name = f"{safe_label(label)}.vtt"
     (folder / name).write_text(vtt, encoding="utf-8", newline="\n")
     return name
 
 
-def list_subtitles(base_dir: Path, movie_id: int, url_prefix: str = "/subtitles") -> list[dict[str, object]]:
-    """Pistas disponibles para una película, en orden alfabético estable."""
-    folder = Path(base_dir) / str(int(movie_id))
+def list_subtitles_in(folder: Path, url_base: str) -> list[dict[str, object]]:
+    """Pistas de ``folder`` en orden alfabético estable; ``url_base`` sin barra final."""
     if not folder.is_dir():
         return []
     tracks: list[dict[str, object]] = []
@@ -94,8 +98,18 @@ def list_subtitles(base_dir: Path, movie_id: int, url_prefix: str = "/subtitles"
                 "filename": path.name,
                 "label": label,
                 "srclang": srclang_for(label),
-                "url": f"{url_prefix}/{int(movie_id)}/{quote(path.name)}",
+                "url": f"{url_base}/{quote(path.name)}",
                 "default": index == 0,
             }
         )
     return tracks
+
+
+def save_subtitle(base_dir: Path, movie_id: int, raw: bytes, label: str) -> str:
+    """Guarda el subtítulo de una película y devuelve el nombre de archivo resultante."""
+    return save_subtitle_in(Path(base_dir) / str(int(movie_id)), raw, label)
+
+
+def list_subtitles(base_dir: Path, movie_id: int, url_prefix: str = "/subtitles") -> list[dict[str, object]]:
+    """Pistas disponibles para una película, en orden alfabético estable."""
+    return list_subtitles_in(Path(base_dir) / str(int(movie_id)), f"{url_prefix}/{int(movie_id)}")

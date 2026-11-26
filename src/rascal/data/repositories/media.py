@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from rascal.data.enums import CreditRole, SourceStatus
+from rascal.data.enums import P2P_KINDS, CreditRole, SourceStatus
 from rascal.data.models import AuditLog, Genre, MediaSource, Movie, MovieCredit, Person, Review, movie_genres
 
 
@@ -41,11 +41,39 @@ class SourceRepository:
             or 0
         ) > 0
 
+    def url_exists_for_movie(self, movie_id: int, url_hash: str) -> bool:
+        return (
+            self.session.scalar(
+                select(func.count()).where(MediaSource.movie_id == movie_id, MediaSource.url_hash == url_hash)
+            )
+            or 0
+        ) > 0
+
+    def list_for_episode(self, episode_id: int, *, include_disabled: bool = True) -> list[MediaSource]:
+        stmt = select(MediaSource).where(MediaSource.episode_id == episode_id).order_by(MediaSource.created_at)
+        if not include_disabled:
+            stmt = stmt.where(MediaSource.status != SourceStatus.DISABLED)
+        return list(self.session.scalars(stmt))
+
+    def siblings(self, source: MediaSource, *, include_disabled: bool = False) -> list[MediaSource]:
+        """Otras versiones del MISMO contenido: misma película, o mismo capítulo."""
+        stmt = select(MediaSource).where(MediaSource.movie_id == source.movie_id).order_by(MediaSource.created_at)
+        if source.episode_id is None:
+            stmt = stmt.where(MediaSource.episode_id.is_(None))
+        else:
+            stmt = stmt.where(MediaSource.episode_id == source.episode_id)
+        if not include_disabled:
+            stmt = stmt.where(MediaSource.status != SourceStatus.DISABLED)
+        return list(self.session.scalars(stmt))
+
     def active(self) -> list[MediaSource]:
-        """Fuentes que el motor debe reanudar al arrancar."""
+        """Fuentes P2P que el motor debe reanudar al arrancar (las directas no usan el motor)."""
         return list(
             self.session.scalars(
-                select(MediaSource).where(MediaSource.status.in_([SourceStatus.DOWNLOADING, SourceStatus.COMPLETE]))
+                select(MediaSource).where(
+                    MediaSource.status.in_([SourceStatus.DOWNLOADING, SourceStatus.COMPLETE]),
+                    MediaSource.kind.in_(P2P_KINDS),
+                )
             )
         )
 

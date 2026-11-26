@@ -108,7 +108,7 @@
     .alert.error { background: #311919; border-color: var(--red); color: #ffd4d4; }
     .alert.ok { background: #152b1e; border-color: var(--green); color: #d4ffe3; }
     label { display: block; font-size: 0.85rem; color: var(--muted); margin: 10px 0 4px; font-weight: 600; }
-    input[type=text], input[type=password], input[type=email], input[type=number], input[type=date], select, textarea {
+    input[type=text], input[type=url], input[type=search], input[type=password], input[type=email], input[type=number], input[type=date], select, textarea {
       width: 100%; background: #12161a; border: 1px solid var(--border); color: #fff;
       padding: 9px 12px; border-radius: 6px; font-size: 0.93rem; font-family: inherit;
     }
@@ -162,8 +162,9 @@
     .p2p-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .player-box { margin: 12px 0 16px; }
     .player-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; margin-bottom: 8px; }
-    .sources-table td.actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+    .sources-table td.actions .actions-inner { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
     .sources-table td.actions form { margin: 0; }
+    #rascal-player { aspect-ratio: auto; height: calc(56.25vw + 120px); max-height: 92vh; }
     .btn-sm { padding: 4px 10px; font-size: .8rem; }
     .btn-danger { background: #3d1c1c; color: #ff8a8a; border: 1px solid #6b2929; }
     .table-responsive { overflow-x: auto; }
@@ -226,7 +227,63 @@
     .search-inline { display: flex; gap: 8px; margin-top: 12px; }
     .search-inline input { flex: 1; }
 
+    /* ── v2.2: series, "Dónde ver", fuentes, paginación ─────────────────── */
+    .type-line { display: flex; gap: 8px; align-items: center; margin: 2px 0 6px; }
+    .card-type { position: absolute; top: 8px; left: 8px; z-index: 1; background: rgba(15,19,22,.85); color: var(--blue);
+                 border: 1px solid var(--border); font-size: .7rem; font-weight: 700; padding: 2px 7px; border-radius: 4px; }
+    .where-to-watch { margin: 14px 0 4px; }
+    .watch-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+    .watch-badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px 6px 7px; border-radius: 8px;
+                   background: var(--surface-2); border: 1px solid var(--border); color: var(--text); }
+    .watch-badge:hover { border-color: var(--green); text-decoration: none; color: #fff; }
+    .watch-badge img { border-radius: 5px; }
+    .watch-name { font-weight: 700; font-size: .9rem; }
+    .watch-offer { font-size: .72rem; color: var(--muted); border-left: 1px solid var(--border); padding-left: 8px; }
+    .offer-free .watch-offer { color: var(--green); }
+    .credit-item { display: inline-flex; align-items: center; gap: 2px; }
+    .edit-bio { font-size: .72rem; color: var(--muted); padding: 2px 6px; border-radius: 4px; }
+    .edit-bio:hover { color: var(--blue); background: var(--surface-2); text-decoration: none; }
+    .season-tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--border); margin: 14px 0 12px; }
+    .season-tabs a { padding: 9px 14px; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; }
+    .season-tabs a:hover { color: var(--text); text-decoration: none; }
+    .season-tabs a.active { color: #fff; border-bottom-color: var(--green); font-weight: 700; }
+    .season-overview { color: var(--muted); max-width: 72ch; margin: 0 0 12px; }
+    .episode-grid { list-style: none; padding: 0; margin: 0 0 18px; display: grid; gap: 10px;
+                    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+    .episode-card { display: grid; grid-template-columns: 140px 1fr; gap: 12px; padding: 8px; border-radius: 8px;
+                    border: 1px solid var(--border); background: var(--surface-2); color: var(--text); height: 100%; }
+    .episode-card:hover { border-color: var(--blue); text-decoration: none; }
+    .episode-card.selected { border-color: var(--green); box-shadow: inset 3px 0 0 var(--green); }
+    .episode-still { position: relative; aspect-ratio: 16 / 9; border-radius: 5px; overflow: hidden;
+                     background: linear-gradient(145deg, #1f2833, #11161b); }
+    .episode-still img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .episode-num { position: absolute; left: 6px; bottom: 4px; font-weight: 800; font-size: 1.1rem; color: #fff;
+                   text-shadow: 0 1px 4px rgba(0,0,0,.9); }
+    .episode-title { font-weight: 700; }
+    .episode-synopsis { margin: 4px 0 0; font-size: .84rem; color: var(--muted); display: -webkit-box;
+                        -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .episode-heading { margin: 18px 0 8px; }
+    .privacy-note { border-left: 3px solid var(--orange); background: #2a2117; color: #f3dcc0; padding: 10px 12px;
+                    border-radius: 0 6px 6px 0; font-size: .86rem; margin: 10px 0 14px; max-width: 90ch; }
+    .source-type { font-size: .78rem; font-weight: 700; white-space: nowrap; }
+    .source-type.type-torrent, .source-type.type-magnet { color: var(--orange); }
+    .source-type.type-direct_url, .source-type.type-hls { color: var(--green); }
+    .sources-table tr.is-selected td { background: rgba(0,224,84,.05); }
+    .pager { display: flex; gap: 16px; align-items: center; justify-content: center; margin: 22px 0; }
+    .narrow { max-width: 440px; margin: 30px auto; }
+    .bio-text { white-space: pre-line; line-height: 1.65; max-width: 75ch; }
+    .person-head { display: grid; grid-template-columns: 200px 1fr; gap: 26px; align-items: start; }
+    .person-photo { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 10px; background: var(--surface-2); }
+    .facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 10px 0 14px; font-size: .92rem; }
+    .facts dt { color: var(--muted); }
+    .facts dd { margin: 0; }
+    :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
     @media (max-width: 760px) {
+      .person-head { grid-template-columns: 1fr; }
+      .person-head .person-photo { max-width: 200px; }
+      .episode-card { grid-template-columns: 110px 1fr; }
       .hero-content { grid-template-columns: 1fr; }
       .hero-side { flex-direction: row; align-items: flex-end; }
       .hero-side .poster-wrap { width: 40%; }
@@ -242,6 +299,7 @@
     <nav class="menu">
       <a href="/" class="{{ 'active' if nav == 'home' else '' }}">Inicio</a>
       <a href="/browse" class="{{ 'active' if nav == 'browse' else '' }}">Catálogo</a>
+      <a href="/browse?type=series" class="{{ 'active' if nav == 'series' else '' }}">Series</a>
       <a href="/partner" class="{{ 'active' if nav == 'partner' else '' }}">Panel Partner</a>
     </nav>
     <form class="search-box" action="/search" method="get">
@@ -263,5 +321,25 @@
   {% if err %}<div class="alert error">{{ err }}</div>{% endif %}
   {% block content %}{% endblock %}
 </main>
+<script nonce="{{ csp_nonce() }}">
+/* Sin manejadores inline (la CSP los bloquea): confirmaciones y pósters de respaldo delegados. */
+document.addEventListener("submit", function (ev) {
+  var msg = ev.target.getAttribute && ev.target.getAttribute("data-confirm");
+  if (msg && !window.confirm(msg)) { ev.preventDefault(); }
+}, true);
+/* El reproductor (iframe del mismo origen) informa su altura real: barra de idioma + video + estado. */
+window.addEventListener("message", function (ev) {
+  if (ev.origin !== window.location.origin || !ev.data || typeof ev.data.rascalPlayerHeight !== "number") { return; }
+  var frame = document.getElementById("rascal-player");
+  if (frame) { frame.style.height = Math.min(Math.max(ev.data.rascalPlayerHeight, 200), 4000) + "px"; frame.style.maxHeight = "none"; }
+});
+document.addEventListener("error", function (ev) {
+  var img = ev.target;
+  if (img.tagName === "IMG" && img.getAttribute("data-fallback") === "next") {
+    img.style.display = "none";
+    if (img.nextElementSibling) { img.nextElementSibling.style.display = "block"; }
+  }
+}, true);
+</script>
 </body>
 </html>

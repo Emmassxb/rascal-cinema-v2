@@ -5,18 +5,30 @@
 <datalist id="quality-options">{% for q in quality_suggestions %}<option value="{{ q }}">{% endfor %}</datalist>
 
 <form class="panel" method="post" action="{{ action_url }}" enctype="multipart/form-data" id="movie-editor">
-  <h2>{{ 'Editar Película #' ~ movie_id if movie_id else 'Nueva Película' }}</h2>
+  <h2>{% if movie_id %}Editar {{ 'serie' if is_series else 'película' }} #{{ movie_id }}{% else %}{{ 'Nueva serie' if is_series else 'Nueva película' }}{% endif %}
+    {% if movie_id and movie_slug %}<a class="small" style="margin-left:10px;font-weight:400;" href="/movie/{{ movie_slug }}">Ver ficha pública</a>{% endif %}</h2>
+  <div class="form-grid" style="margin-bottom:10px;">
+    <div>
+      <label for="media_type">Tipo de título</label>
+      <select name="media_type" id="media_type">
+        <option value="movie" {{ '' if is_series else 'selected' }}>Película</option>
+        <option value="series" {{ 'selected' if is_series else '' }}>Serie (temporadas y capítulos)</option>
+      </select>
+    </div>
+  </div>
+  <input type="hidden" name="tmdb_import_seasons" id="tmdb_import_seasons" value="">
 
   <!-- Importación desde TMDB: sólo rellena campos; todo sigue siendo editable -->
   <div style="background:var(--surface-2);padding:14px;border-radius:8px;margin-bottom:18px;">
     <label>Enlace o ID de TMDB</label>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <input type="text" id="tmdb_ref" placeholder="https://www.themoviedb.org/movie/12345-... o 12345" style="flex:1 1 320px;"
+      <input type="text" id="tmdb_ref" placeholder="themoviedb.org/movie/12345, themoviedb.org/tv/1399 o un ID" style="flex:1 1 320px;"
              {{ '' if tmdb_enabled else 'disabled' }}>
       <button class="btn btn-secondary" type="button" id="tmdb-import" {{ '' if tmdb_enabled else 'disabled' }}>Importar datos de TMDB</button>
     </div>
     <small style="color:var(--muted);">
-      {% if tmdb_enabled %}Rellena título, sinopsis, reparto, productoras, imágenes y más. Revisa y ajusta lo que necesites.
+      {% if tmdb_enabled %}Acepta películas (/movie/) y series (/tv/). Rellena título, sinopsis, reparto, imágenes y tráiler en es-MX (con respaldo en inglés).
+        {% if not movie_id %}En series, al guardar se importan también las temporadas y capítulos.{% endif %} Todo queda editable.
       {% else %}Importación desactivada: define RASCAL_TMDB_API_KEY en .env. Puedes capturar la ficha a mano.{% endif %}
     </small>
     <div id="tmdb-status" role="status" style="margin-top:8px;font-size:0.9rem;"></div>
@@ -41,7 +53,7 @@
   <div class="form-grid">
     <div><label>Géneros (separados por coma)</label><input type="text" name="genres" value="{{ genres_str }}" placeholder="Drama, Ciencia ficción, Animación"></div>
     <div><label>Productoras (separadas por coma)</label><input type="text" name="companies" value="{{ companies_str }}" placeholder="Blender Foundation, Toho"></div>
-    <div><label>Directores (separados por coma)</label><input type="text" name="directors" value="{{ directors_str }}" placeholder="Makoto Shinkai"></div>
+    <div><label>{{ 'Creadores' if is_series else 'Directores' }} (separados por coma)</label><input type="text" name="directors" value="{{ directors_str }}" placeholder="Makoto Shinkai"></div>
   </div>
 
   <div class="form-grid">
@@ -72,7 +84,7 @@
   </div>
 
   {% if not movie_id %}
-  <h3 style="margin-top:20px;font-size:0.95rem;color:var(--green);">Archivos Multimedia Iniciales (Opcional al crear)</h3>
+  <h3 style="margin-top:20px;font-size:0.95rem;color:var(--green);">Archivos iniciales (opcional, sólo películas: en series se añaden por capítulo)</h3>
   <div class="form-grid" style="background:var(--surface-2);padding:14px;border-radius:8px;margin-top:8px;">
     <div>
       <label>Archivo .torrent</label>
@@ -118,6 +130,147 @@
 </form>
 
 {% if movie_id %}
+{# ── Personas: acceso directo a «Editar bio» ─────────────────────────────── #}
+{% if people %}
+<div class="panel" id="personas">
+  <h2>Reparto y equipo</h2>
+  <p class="muted small">Guarda los cambios del formulario antes de editar biografías (los nombres nuevos se crean al guardar).</p>
+  <div class="chips">
+    {% for role_label, person in people %}{% if person.id %}
+      <span class="credit-item"><span class="pill">{{ person.name }} <span class="muted">· {{ role_label }}</span></span>
+        <a class="edit-bio" href="/partner/person/{{ person.id }}?back=/partner/movie/{{ movie_id }}">Editar bio</a></span>
+    {% endif %}{% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{# ── Dónde ver ───────────────────────────────────────────────────────────── #}
+<div class="panel" id="donde-ver">
+  <h2>Dónde ver (plataformas oficiales)</h2>
+  {% if watch_links %}
+    <div class="table-responsive"><table>
+      <thead><tr><th>Plataforma</th><th>Modalidad</th><th>Región</th><th>Enlace directo</th><th></th></tr></thead>
+      <tbody>
+      {% for w in watch_links %}
+        <tr>
+          <td colspan="4">
+            <form method="post" action="/partner/watch-link/{{ w.id }}/update" class="form-grid" style="gap:6px;">
+              <input type="hidden" name="movie_id" value="{{ movie_id }}">
+              <input type="text" name="platform_name" value="{{ w.platform_name }}" aria-label="Plataforma" required>
+              <select name="offer_type" aria-label="Modalidad">
+                {% for o, lbl in (('subscription','Suscripción'),('rent','Renta'),('buy','Compra'),('free','Gratis')) %}
+                  <option value="{{ o }}" {{ 'selected' if w.offer_type.value == o else '' }}>{{ lbl }}</option>
+                {% endfor %}
+              </select>
+              <input type="text" name="region" value="{{ w.region }}" maxlength="2" aria-label="Región">
+              <input type="text" name="url" value="{{ w.url }}" aria-label="Enlace" required>
+              <button class="btn btn-secondary btn-sm" type="submit">Guardar</button>
+            </form>
+          </td>
+          <td>
+            <form method="post" action="/partner/watch-link/{{ w.id }}/delete" data-confirm="¿Quitar {{ w.platform_name }} de «Dónde ver»?">
+              <input type="hidden" name="movie_id" value="{{ movie_id }}">
+              <button class="btn btn-danger btn-sm" type="submit">Quitar</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+  {% else %}
+    <p class="muted">Sin plataformas todavía. Añade el enlace directo al título en cada servicio.</p>
+  {% endif %}
+  <form method="post" action="/partner/movie/{{ movie_id }}/watch-links" class="form-grid" id="watch-add"
+        style="background:var(--surface-2);padding:14px;border-radius:8px;margin-top:12px;">
+    <div><label>Plataforma *</label><input type="text" name="platform_name" placeholder="Netflix, Prime Video, Mubi…" required></div>
+    <div>
+      <label>Modalidad</label>
+      <select name="offer_type">
+        <option value="subscription">Suscripción</option><option value="rent">Renta</option>
+        <option value="buy">Compra</option><option value="free">Gratis</option>
+      </select>
+    </div>
+    <div><label>Región (ISO)</label><input type="text" name="region" value="{{ region }}" maxlength="2"></div>
+    <div style="grid-column:1/-1;"><label>Enlace directo al título *</label><input type="url" name="url" placeholder="https://www.netflix.com/title/…" required></div>
+    <input type="hidden" name="platform_slug" value="">
+    <input type="hidden" name="logo_path" value="">
+    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+      <button class="btn" type="submit">Añadir plataforma</button>
+      {% if tmdb_enabled %}<button class="btn btn-secondary" type="button" id="watch-suggest" data-url="/partner/movie/{{ movie_id }}/watch-suggest">Sugerir desde TMDB ({{ region }})</button>{% endif %}
+    </div>
+  </form>
+  <div id="watch-suggestions" role="status" class="small" style="margin-top:10px;"></div>
+</div>
+
+{% if is_series %}
+{# ── Temporadas y capítulos ──────────────────────────────────────────────── #}
+<div class="panel" id="temporadas">
+  <div class="p2p-head">
+    <h2>Temporadas y capítulos</h2>
+    {% if tmdb_enabled %}
+      <form method="post" action="/partner/series/{{ movie_id }}/import-tmdb"
+            data-confirm="Se crearán las temporadas y capítulos que falten y se rellenarán campos vacíos. Lo que ya editaste no se toca. ¿Continuar?">
+        <button class="btn btn-secondary btn-sm" type="submit" {{ '' if f.tmdb_id else 'disabled' }}>Importar/actualizar desde TMDB</button>
+      </form>
+    {% endif %}
+  </div>
+  <p class="muted small">Las fuentes (torrent, magnet, enlace directo, HLS) y los subtítulos se gestionan dentro de cada capítulo.</p>
+  {% for se in seasons %}
+    <details class="season-admin" {{ 'open' if loop.first else '' }}>
+      <summary><strong>{{ 'Especiales' if se.season_number == 0 else 'Temporada ' ~ se.season_number }}</strong>
+        {% if se.title %}<span class="muted"> · {{ se.title }}</span>{% endif %} <span class="muted small">({{ se.episodes|length }} capítulos)</span></summary>
+      <form method="post" action="/partner/season/{{ se.id }}/update" class="form-grid" style="margin:10px 0;">
+        <input type="hidden" name="movie_id" value="{{ movie_id }}">
+        <div><label>Número</label><input type="number" name="season_number" value="{{ se.season_number }}" min="0" required></div>
+        <div><label>Título</label><input type="text" name="title" value="{{ se.title or '' }}"></div>
+        <div><label>Año</label><input type="number" name="air_year" value="{{ se.air_year or '' }}"></div>
+        <div><label>Póster (URL)</label><input type="text" name="poster_path" value="{{ se.poster_path or '' }}"></div>
+        <div style="grid-column:1/-1;"><label>Resumen</label><textarea name="overview">{{ se.overview or '' }}</textarea></div>
+        <div style="display:flex;gap:8px;align-items:flex-end;"><button class="btn btn-secondary btn-sm" type="submit">Guardar temporada</button></div>
+      </form>
+      <form method="post" action="/partner/season/{{ se.id }}/delete" data-confirm="¿Eliminar la temporada {{ se.season_number }} con TODOS sus capítulos y fuentes?">
+        <input type="hidden" name="movie_id" value="{{ movie_id }}">
+        <button class="btn btn-danger btn-sm" type="submit">Eliminar temporada</button>
+      </form>
+      {% if se.episodes %}
+        <div class="table-responsive"><table style="margin-top:10px;">
+          <thead><tr><th>#</th><th>Título</th><th>Duración</th><th>Estreno</th><th>Fuentes</th><th></th></tr></thead>
+          <tbody>
+          {% for ep in se.episodes %}
+            <tr>
+              <td>{{ ep.episode_number }}</td>
+              <td>{{ ep.title or '—' }}</td>
+              <td>{{ ep.runtime_min ~ ' min' if ep.runtime_min else '—' }}</td>
+              <td>{{ ep.air_date.strftime('%d/%m/%Y') if ep.air_date else '—' }}</td>
+              <td>{{ ep.sources|length }}</td>
+              <td><a class="btn btn-secondary btn-sm" href="/partner/episode/{{ ep.id }}">Editar, fuentes y subs</a></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table></div>
+      {% endif %}
+      <form method="post" action="/partner/season/{{ se.id }}/episodes" class="form-grid"
+            style="background:var(--surface-2);padding:12px;border-radius:8px;margin-top:10px;">
+        <input type="hidden" name="movie_id" value="{{ movie_id }}">
+        <div><label>Nº de capítulo *</label><input type="number" name="episode_number" min="0" value="{{ (se.episodes|map(attribute='episode_number')|max or 0) + 1 }}" required></div>
+        <div><label>Título</label><input type="text" name="title"></div>
+        <div><label>Duración (min)</label><input type="number" name="runtime_min" min="1"></div>
+        <div><label>Fecha de emisión</label><input type="date" name="air_date"></div>
+        <div style="display:flex;align-items:flex-end;"><button class="btn btn-sm" type="submit">Añadir capítulo</button></div>
+      </form>
+    </details>
+  {% else %}
+    <p class="muted">Sin temporadas todavía.</p>
+  {% endfor %}
+  <form method="post" action="/partner/series/{{ movie_id }}/seasons" class="form-grid"
+        style="background:var(--surface-2);padding:14px;border-radius:8px;margin-top:14px;">
+    <div><label>Nº de temporada *</label><input type="number" name="season_number" min="0" value="{{ (seasons|map(attribute='season_number')|max or 0) + 1 }}" required></div>
+    <div><label>Título</label><input type="text" name="title" placeholder="Temporada 1"></div>
+    <div><label>Año</label><input type="number" name="air_year"></div>
+    <div style="display:flex;align-items:flex-end;"><button class="btn" type="submit">Crear temporada</button></div>
+  </form>
+</div>
+{% else %}
 <div class="panel">
   <h2>Subtítulos (.srt / .vtt)</h2>
   {% if subtitles %}
@@ -144,75 +297,15 @@
   </form>
 </div>
 
-<div class="panel">
-  <h2>Fuentes de Streaming P2P (.torrent / Magnet)</h2>
-  {% if sources %}
-    <table>
-      <thead><tr><th>Etiqueta</th><th>Idioma / Calidad</th><th>Archivo / Hash</th><th>Códecs / Modo</th><th>Estado</th><th>Acción</th></tr></thead>
-      <tbody>
-        {% for s in sources %}
-          <tr>
-            <td><strong>{{ s.label }}</strong></td>
-            <td>
-              <form method="post" action="/partner/source/{{ s.id }}/update" style="display:grid;gap:4px;min-width:170px;">
-                <input type="hidden" name="movie_id" value="{{ movie_id }}">
-                <input type="text" name="audio_language" list="audio-options" value="{{ s.audio_language or '' }}" placeholder="Idioma" style="padding:4px 6px;">
-                <input type="text" name="quality" list="quality-options" value="{{ s.quality or '' }}" placeholder="Calidad" style="padding:4px 6px;">
-                <button class="btn btn-secondary" type="submit" style="padding:3px 8px;font-size:0.78rem;">Guardar</button>
-              </form>
-            </td>
-            <td>{{ s.file_path or s.display_name or s.info_hash }}<br><small style="color:var(--muted);">{{ s.info_hash }}</small></td>
-            <td>{{ s.container or '?' }} · {{ s.video_codec or '?' }}/{{ s.audio_codec or '?' }} · <span class="badge">{{ s.playback_mode.value }}</span></td>
-            <td>{{ s.status.value }}{% if s.status_message %}<br><small style="color:var(--muted);">{{ s.status_message }}</small>{% endif %}</td>
-            <td>
-              <form method="post" action="/partner/source/{{ s.id }}/delete">
-                <input type="hidden" name="movie_id" value="{{ movie_id }}">
-                <button class="btn btn-danger" type="submit" style="padding:4px 10px;font-size:0.8rem;">Eliminar</button>
-              </form>
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p style="color:var(--muted);">Esta película aún no tiene fuentes torrent asociadas.</p>
-  {% endif %}
-
-  <div class="form-grid" style="margin-top:18px;">
-    <form method="post" action="/partner/movie/{{ movie_id }}/upload-torrent" enctype="multipart/form-data" style="background:var(--surface-2);padding:14px;border-radius:8px;">
-      <h3 style="font-size:1rem;">Subir archivo .torrent</h3>
-      <label>Archivo .torrent *</label>
-      <input type="file" name="torrent_file" accept=".torrent,application/x-bittorrent" required>
-      <label>Etiqueta de fuente</label>
-      <input type="text" name="label" value="1080p Principal" required>
-      <label>Idioma de audio</label>
-      <input type="text" name="audio_language" list="audio-options" placeholder="Español Latino">
-      <label>Calidad</label>
-      <input type="text" name="quality" list="quality-options" placeholder="1080p">
-      <label>Declaración de derechos / licencia *</label>
-      <input type="text" name="rights_statement" value="Distribución autorizada / Dominio público" required>
-      <button class="btn" type="submit" style="margin-top:10px;">Subir .torrent e iniciar P2P</button>
-    </form>
-
-    <form method="post" action="/partner/movie/{{ movie_id }}/add-magnet" style="background:var(--surface-2);padding:14px;border-radius:8px;">
-      <h3 style="font-size:1rem;">Añadir enlace Magnet</h3>
-      <label>Magnet URI *</label>
-      <input type="text" name="magnet_uri" placeholder="magnet:?xt=urn:btih:..." required>
-      <label>Etiqueta de fuente</label>
-      <input type="text" name="label" value="1080p Magnet" required>
-      <label>Idioma de audio</label>
-      <input type="text" name="audio_language" list="audio-options" placeholder="Español Latino">
-      <label>Calidad</label>
-      <input type="text" name="quality" list="quality-options" placeholder="1080p">
-      <label>Declaración de derechos / licencia *</label>
-      <input type="text" name="rights_statement" value="Distribución autorizada / Dominio público" required>
-      <button class="btn btn-secondary" type="submit" style="margin-top:10px;">Añadir Magnet e iniciar P2P</button>
-    </form>
-  </div>
+<div class="panel" id="fuentes">
+  <h2>Fuentes de reproducción</h2>
+  {% set return_to = '/partner/movie/' ~ movie_id %}
+  {% include "partials/sources_admin.html" %}
 </div>
 {% endif %}
+{% endif %}
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 (function () {
   var btn = document.getElementById('tmdb-import');
   if (!btn) { return; }
@@ -221,9 +314,11 @@
   btn.addEventListener('click', function () {
     var ref = document.getElementById('tmdb_ref').value.trim();
     if (!ref) { status.textContent = 'Escribe un enlace o un ID de TMDB.'; return; }
+    var typeSel = document.getElementById('media_type');
     btn.disabled = true;
     status.textContent = 'Consultando TMDB…';
-    fetch('/partner/tmdb-lookup?ref=' + encodeURIComponent(ref), { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+    var url = '/partner/tmdb-lookup?ref=' + encodeURIComponent(ref) + '&kind=' + encodeURIComponent(typeSel ? typeSel.value : 'movie');
+    fetch(url, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
       .then(function (res) {
         if (!res.ok || !res.data.ok) { throw new Error(res.data.error || 'No se pudo importar.'); }
@@ -233,11 +328,55 @@
           var el = form.elements[name];
           if (el && value) { el.value = value; filled += 1; }
         });
-        var note = res.data.filled_from_fallback.length
-          ? ' (algunos textos se tomaron de la versión en inglés)' : '';
-        status.textContent = 'Importados ' + filled + ' campos' + note + '. Revisa antes de guardar.';
+        if (typeSel && res.data.kind) { typeSel.value = res.data.kind === 'series' ? 'series' : 'movie'; }
+        var importSeasons = document.getElementById('tmdb_import_seasons');
+        if (importSeasons) { importSeasons.value = res.data.kind === 'series' ? '1' : ''; }
+        var notes = (res.data.notes || []).join(' ');
+        status.textContent = 'Importados ' + filled + ' campos. ' + notes + ' Revisa antes de guardar.';
       })
       .catch(function (err) { status.textContent = err.message; })
+      .then(function () { btn.disabled = false; });
+  });
+})();
+
+(function () {
+  /* Sugerencias de «Dónde ver»: rellenan el formulario de alta; el partner pone el enlace directo. */
+  var btn = document.getElementById('watch-suggest');
+  if (!btn) { return; }
+  var box = document.getElementById('watch-suggestions');
+  var form = document.getElementById('watch-add');
+  var labels = { subscription: 'Suscripción', rent: 'Renta', buy: 'Compra', free: 'Gratis' };
+  btn.addEventListener('click', function () {
+    btn.disabled = true;
+    box.textContent = 'Consultando TMDB…';
+    fetch(btn.getAttribute('data-url'), { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        box.textContent = '';
+        if (!d.ok) { box.textContent = d.error || 'No se pudo consultar.'; return; }
+        if (!d.offers.length) { box.textContent = 'TMDB no lista plataformas para ' + d.region + '.'; return; }
+        var p = document.createElement('p');
+        p.className = 'muted';
+        p.textContent = d.note;
+        box.appendChild(p);
+        d.offers.forEach(function (o) {
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'pill';
+          b.textContent = o.platform_name + ' · ' + (labels[o.offer_type] || o.offer_type);
+          b.addEventListener('click', function () {
+            form.elements.platform_name.value = o.platform_name;
+            form.elements.platform_slug.value = o.platform_slug;
+            form.elements.offer_type.value = o.offer_type;
+            form.elements.logo_path.value = o.logo_url || '';
+            form.elements.url.value = o.url;
+            form.elements.url.focus();
+            form.elements.url.select();
+          });
+          box.appendChild(b);
+        });
+      })
+      .catch(function () { box.textContent = 'No se pudo consultar TMDB.'; })
       .then(function () { btn.disabled = false; });
   });
 })();

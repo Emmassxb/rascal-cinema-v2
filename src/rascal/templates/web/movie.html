@@ -28,7 +28,7 @@
           </form>
         {% endif %}
         {% if can_edit %}
-          <a class="btn btn-block" href="/partner/movie/{{ movie.id }}">✎ Editar ficha / torrents / subs</a>
+          <a class="btn btn-block" href="/partner/movie/{{ movie.id }}">✎ Editar ficha, fuentes y subtítulos</a>
         {% endif %}
       </div>
     </div>
@@ -37,6 +37,11 @@
       <div class="hero-title-row">
         <div>
           <h1>{{ movie.title }} <span class="muted-year">({{ movie.release_year or 's/f' }})</span></h1>
+          {% if movie.is_series %}
+            <div class="type-line"><span class="badge">Serie</span>
+              <span class="muted small">{{ movie.seasons|selectattr('season_number', 'gt', 0)|list|length }} temporada(s) · {{ movie.seasons|sum(attribute='episode_count') }} capítulos</span>
+            </div>
+          {% endif %}
           {% if movie.original_title and movie.original_title != movie.title %}
             <div class="original-title">Título original: {{ movie.original_title }}</div>
           {% endif %}
@@ -50,23 +55,39 @@
       {% if movie.tagline %}<p class="tagline">“{{ movie.tagline }}”</p>{% endif %}
       {% if movie.synopsis %}<p class="synopsis">{{ movie.synopsis }}</p>{% endif %}
 
+      {% if movie.watch_links %}
+        <div class="where-to-watch" id="donde-ver">
+          <span class="credit-label">Dónde ver</span>
+          <div class="watch-badges">
+            {% for w in movie.watch_links %}{% set href = safe_href(w.url) %}{% if href %}
+              <a class="watch-badge offer-{{ w.offer_type.value }}" href="{{ href }}" target="_blank" rel="noopener noreferrer"
+                 title="{{ w.platform_name }} · {{ w.offer_label }} · {{ w.region }}">
+                {% if media_url(w.logo_path) %}<img src="{{ media_url(w.logo_path) }}" alt="" width="22" height="22" loading="lazy">{% endif %}
+                <span class="watch-name">{{ w.platform_name }}</span>
+                <span class="watch-offer">{{ w.offer_label }}</span>
+              </a>
+            {% endif %}{% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
       <div class="chips">
         {% for g in movie.genres %}<a class="pill" href="/genre/{{ g.slug }}">{{ g.name }}</a>{% endfor %}
         {% if movie.runtime_min %}<span class="pill">{{ movie.runtime_min }} min</span>{% endif %}
-        {% if movie.imdb_id %}<a class="pill" href="https://www.imdb.com/title/{{ movie.imdb_id }}/" target="_blank" rel="noopener">IMDb</a>{% endif %}
-        {% if movie.tmdb_id %}<a class="pill" href="https://www.themoviedb.org/movie/{{ movie.tmdb_id }}" target="_blank" rel="noopener">TMDB</a>{% endif %}
+        {% if movie.imdb_id %}<a class="pill" href="https://www.imdb.com/title/{{ movie.imdb_id }}/" target="_blank" rel="noopener noreferrer">IMDb</a>{% endif %}
+        {% if movie.tmdb_id %}<a class="pill" href="https://www.themoviedb.org/{{ 'tv' if movie.is_series else 'movie' }}/{{ movie.tmdb_id }}" target="_blank" rel="noopener noreferrer">TMDB</a>{% endif %}
       </div>
 
       {% if movie.directors %}
-        <div class="credit-row"><span class="credit-label">Dirección</span>
-          {% for d in movie.directors %}<a class="pill" href="/person/{{ d.slug }}">{{ d.name }}</a>{% endfor %}
+        <div class="credit-row"><span class="credit-label">{{ 'Creación' if movie.is_series else 'Dirección' }}</span>
+          {% for d in movie.directors %}<span class="credit-item"><a class="pill" href="/person/{{ d.slug }}">{{ d.name }}</a>{% if can_edit %}<a class="edit-bio" href="/partner/person/{{ d.id }}?back=/movie/{{ movie.slug }}" title="Editar biografía de {{ d.name }}">Editar bio</a>{% endif %}</span>{% endfor %}
         </div>
       {% endif %}
 
       {% if movie.cast %}
         <div class="credit-row"><span class="credit-label">Reparto</span>
           {% for c in movie.cast %}
-            <a class="pill" href="/person/{{ c.person.slug }}"><strong>{{ c.person.name }}</strong>{% if c.character_name %} <span class="muted">({{ c.character_name }})</span>{% endif %}</a>
+            <span class="credit-item"><a class="pill" href="/person/{{ c.person.slug }}"><strong>{{ c.person.name }}</strong>{% if c.character_name %} <span class="muted">({{ c.character_name }})</span>{% endif %}</a>{% if can_edit %}<a class="edit-bio" href="/partner/person/{{ c.person.id }}?back=/movie/{{ movie.slug }}" title="Editar biografía de {{ c.person.name }}">Editar bio</a>{% endif %}</span>
           {% endfor %}
         </div>
       {% endif %}
@@ -79,7 +100,7 @@
 
       {% if movie.crew %}
         <div class="credit-row"><span class="credit-label">Equipo técnico</span>
-          {% for c in movie.crew %}<a class="pill" href="/person/{{ c.person.slug }}">{{ c.person.name }} <span class="muted">· {{ c.role.value }}</span></a>{% endfor %}
+          {% for c in movie.crew %}<span class="credit-item"><a class="pill" href="/person/{{ c.person.slug }}">{{ c.person.name }} <span class="muted">· {{ c.role.value }}</span></a>{% if can_edit %}<a class="edit-bio" href="/partner/person/{{ c.person.id }}?back=/movie/{{ movie.slug }}" title="Editar biografía de {{ c.person.name }}">Editar bio</a>{% endif %}</span>{% endfor %}
         </div>
       {% endif %}
 
@@ -108,79 +129,130 @@
               allowfullscreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe>
     </div>
   </details>
-{% elif movie.trailer_url %}
-  <div class="panel"><a class="btn btn-secondary" href="{{ movie.trailer_url }}" target="_blank" rel="noopener">🎬 Abrir tráiler externo</a></div>
+{% elif safe_href(movie.trailer_url) %}
+  <div class="panel"><a class="btn btn-secondary" href="{{ safe_href(movie.trailer_url) }}" target="_blank" rel="noopener noreferrer">🎬 Abrir tráiler externo</a></div>
 {% endif %}
 
 {# ════════════════════════════════════════════════════════════════════════════
-   3. REPRODUCTOR P2P Y CONTROL DE DESCARGAS (debajo del tráiler, encima de las reseñas)
+   3. TEMPORADAS/CAPÍTULOS (series) + SELECTOR DE FUENTES + REPRODUCTOR VIDEO.JS
    ════════════════════════════════════════════════════════════════════════════ #}
 <section class="panel p2p" id="p2p">
   <div class="p2p-head">
-    <h2>Reproductor P2P y descargas</h2>
+    <h2>{{ 'Capítulos y reproducción' if movie.is_series else 'Reproducción' }}</h2>
     <span class="badge">Inicio manual</span>
   </div>
-  <p class="muted small">La descarga no empieza al abrir la ficha. Elige una versión y pulsa <strong>Iniciar descarga y reproducir</strong>.</p>
+  <p class="muted small">Nada se descarga ni se reproduce al abrir la ficha. Elige una versión y pulsa el botón de reproducir.</p>
 
-  {% if player_src %}
-    <div class="player-box">
-      <div class="player-meta">
-        <strong>{{ selected_source.label }}</strong>
-        <span class="muted small">
-          {{ selected_source.quality or 'Calidad sin especificar' }} · {{ selected_source.audio_language or 'Idioma sin especificar' }}
-          · usa el botón CC del reproductor para subtítulos y el selector de versiones
-        </span>
-      </div>
-      <iframe id="rascal-player" class="player-frame" src="{{ player_src }}" title="Reproductor de {{ movie.title }}"
-              allowfullscreen allow="autoplay; fullscreen"></iframe>
-    </div>
-  {% elif stream_err %}
-    <div class="alert error">{{ stream_err }}</div>
+  {% if movie.is_series %}
+    {% if movie.seasons %}
+      <nav class="season-tabs" aria-label="Temporadas">
+        {% for se in movie.seasons %}
+          <a href="/movie/{{ movie.slug }}?season={{ se.season_number }}#p2p" class="{{ 'active' if selected_season and se.id == selected_season.id else '' }}"
+             {% if selected_season and se.id == selected_season.id %}aria-current="page"{% endif %}>{{ se.display_title }} <span class="muted small">{{ se.episode_count }}</span></a>
+        {% endfor %}
+      </nav>
+      {% if selected_season and selected_season.overview %}<p class="season-overview">{{ selected_season.overview }}</p>{% endif %}
+      {% if episodes %}
+        <ol class="episode-grid">
+          {% for ep in episodes %}
+            <li>
+              <a class="episode-card{{ ' selected' if selected_episode and ep.id == selected_episode.id else '' }}"
+                 href="/movie/{{ movie.slug }}?season={{ ep.season_number }}&amp;episode={{ ep.id }}#p2p">
+                <div class="episode-still">
+                  {% if media_url(ep.still_path) %}<img src="{{ media_url(ep.still_path) }}" alt="" loading="lazy">{% endif %}
+                  <span class="episode-num">{{ ep.episode_number }}</span>
+                </div>
+                <div class="episode-body">
+                  <div class="episode-title">{{ ep.display_title }}</div>
+                  <div class="muted small">{{ ep.code }}{% if ep.runtime_min %} · {{ ep.runtime_min }} min{% endif %}{% if ep.air_date %} · {{ ep.air_date.strftime('%d/%m/%Y') }}{% endif %}{% if not ep.source_count %} · sin fuentes{% endif %}</div>
+                  {% if ep.synopsis %}<p class="episode-synopsis">{{ ep.synopsis }}</p>{% endif %}
+                </div>
+              </a>
+            </li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        <p class="muted">Esta temporada todavía no tiene capítulos.</p>
+      {% endif %}
+    {% else %}
+      <p class="muted">Esta serie todavía no tiene temporadas.</p>
+    {% endif %}
   {% endif %}
 
-  {% if movie.sources %}
-    <div class="table-responsive">
-      <table class="sources-table">
-        <thead>
-          <tr><th>Versión</th><th>Idioma de audio</th><th>Calidad</th><th>Tamaño</th><th>Estado</th><th>Acciones</th></tr>
-        </thead>
-        <tbody>
-          {% for s in movie.sources %}
-            {% set live = sources_live.get(s.id) %}
-            <tr>
-              <td><strong>{{ s.label }}</strong><div class="muted small">{{ s.container or 'contenedor?' }} · {{ s.playback_mode.value }}</div></td>
-              <td>{{ s.audio_language or '—' }}</td>
-              <td>{{ s.quality or '—' }}</td>
-              <td>{{ fmt_bytes(s.file_size or s.total_size) }}</td>
-              <td>
-                <span class="badge">{{ s.status.value }}</span>
-                {% if live %}
-                  <div class="muted small">{{ live.state }} · {{ (live.progress * 100)|round(1) }}% · {{ live.num_seeds }} seeds / {{ live.num_peers }} peers</div>
-                {% endif %}
-                {% if s.status_message and s.status.value in ('error', 'pending') %}<div class="muted small">{{ s.status_message }}</div>{% endif %}
-              </td>
-              <td class="actions">
-                {% if s.status.value == 'disabled' %}
-                  <span class="muted small">Desactivada</span>
-                {% elif viewer %}
-                  <a class="btn btn-sm" href="/movie/{{ movie.slug }}?source={{ s.id }}&amp;play=1#p2p">▶ Iniciar descarga y reproducir</a>
-                {% else %}
-                  <a class="btn btn-secondary btn-sm" href="/login">Inicia sesión para reproducir</a>
-                {% endif %}
-                {% if can_purge and (s.file_size or s.status.value in ('complete', 'downloading')) %}
-                  <form method="post" action="/movie/{{ movie.slug }}/sources/{{ s.id }}/purge"
-                        onsubmit="return confirm('¿Eliminar los archivos descargados de esta versión? El .torrent o magnet se conserva para volver a descargarla.');">
-                    <button class="btn btn-danger btn-sm" type="submit">🗑️ Eliminar descarga del dispositivo</button>
-                  </form>
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <p class="muted">Esta película todavía no tiene versiones P2P disponibles.</p>
+  {% if not movie.is_series or selected_episode %}
+    {% if selected_episode %}
+      <h3 class="episode-heading">{{ selected_episode.code }} · {{ selected_episode.display_title }}</h3>
+    {% endif %}
+
+    {% if player_src %}
+      <div class="player-box">
+        <div class="player-meta">
+          <strong>{{ selected_source.label }}</strong>
+          <span class="muted small">{{ selected_source.quality or 'Calidad sin especificar' }} · {{ selected_source.audio_language or 'Idioma sin especificar' }}</span>
+        </div>
+        <iframe id="rascal-player" class="player-frame" src="{{ player_src }}" title="Reproductor de {{ movie.title }}"
+                allowfullscreen allow="autoplay; fullscreen; picture-in-picture"></iframe>
+      </div>
+    {% elif stream_err %}
+      <div class="alert error">{{ stream_err }}</div>
+    {% endif %}
+
+    {% if selected_plan and selected_plan.exposes_server_ip %}
+      <p class="privacy-note" role="note">
+        <strong>Privacidad P2P:</strong> esta versión se descarga por BitTorrent. La IP del equipo que ejecuta Rascal Cinema
+        (este servidor, o tu PC si usas el ejecutable) es visible para los demás participantes del enjambre.
+        Los enlaces directos HTTPS y las plataformas de «Dónde ver» no participan en enjambres.
+      </p>
+    {% endif %}
+
+    {% if sources %}
+      <div class="table-responsive">
+        <table class="sources-table">
+          <thead>
+            <tr><th>Versión</th><th>Tipo</th><th>Idioma de audio</th><th>Calidad</th><th>Tamaño</th><th>Estado</th><th>Acciones</th></tr>
+          </thead>
+          <tbody>
+            {% for s in sources %}
+              {% set live = sources_live.get(s.id) %}
+              <tr{% if selected_source and s.id == selected_source.id %} class="is-selected"{% endif %}>
+                <td><strong>{{ s.label }}</strong><div class="muted small">{{ s.container or 'contenedor?' }} · {{ s.playback_mode.value }}</div></td>
+                <td><span class="source-type type-{{ s.source_type }}">{{ {'torrent': 'P2P · .torrent', 'magnet': 'P2P · magnet', 'direct_url': 'Directo HTTPS', 'hls': 'HLS'}[s.source_type] }}</span></td>
+                <td>{{ s.audio_language or '—' }}</td>
+                <td>{{ s.quality or '—' }}</td>
+                <td>{{ fmt_bytes(s.file_size or s.total_size) if s.is_p2p else '—' }}</td>
+                <td>
+                  <span class="badge">{{ s.status.value }}</span>
+                  {% if live %}
+                    <div class="muted small">{{ live.state }} · {{ (live.progress * 100)|round(1) }}% · {{ live.num_seeds }} seeds / {{ live.num_peers }} peers</div>
+                  {% endif %}
+                  {% if s.status_message and s.status.value in ('error', 'pending') %}<div class="muted small">{{ s.status_message }}</div>{% endif %}
+                </td>
+                <td class="actions"><div class="actions-inner">
+                  {% if s.status.value == 'disabled' %}
+                    <span class="muted small">Desactivada</span>
+                  {% elif viewer %}
+                    <a class="btn btn-sm" href="/movie/{{ movie.slug }}?source={{ s.id }}{{ episode_qs }}&amp;play=1#p2p">
+                      {% if s.is_p2p %}▶ Iniciar descarga y reproducir{% else %}▶ Reproducir{% endif %}</a>
+                  {% else %}
+                    <a class="btn btn-secondary btn-sm" href="/login">Inicia sesión para reproducir</a>
+                  {% endif %}
+                  {% if can_purge and s.is_p2p and (s.file_size or s.status.value in ('complete', 'downloading')) %}
+                    <form method="post" action="/movie/{{ movie.slug }}/sources/{{ s.id }}/purge"
+                          data-confirm="¿Eliminar los archivos descargados de esta versión? El .torrent o magnet se conserva para volver a descargarla.">
+                      <button class="btn btn-danger btn-sm" type="submit">🗑️ Eliminar descarga del dispositivo</button>
+                    </form>
+                  {% endif %}
+                </div></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">{{ 'Este capítulo' if movie.is_series else 'Esta película' }} todavía no tiene versiones disponibles.</p>
+    {% endif %}
+  {% elif movie.is_series and episodes %}
+    <p class="muted">Elige un capítulo para ver sus versiones y reproducirlo.</p>
   {% endif %}
 </section>
 
@@ -239,7 +311,7 @@
   {% endif %}
 </section>
 
-<h2 class="section-title">Comentarios de la comunidad ({{ reviews|length }})</h2>
+<h2 class="section-title">Comentarios de la comunidad ({{ review_pager.total }})</h2>
 {% for r in reviews %}
   <div class="panel">
     <div class="review-head">
@@ -270,4 +342,6 @@
 {% else %}
   <p class="muted">Aún no hay reseñas. ¡Sé el primero en opinar!</p>
 {% endfor %}
+{% from "macros.html" import pagination %}
+{{ pagination(review_pager, '/movie/' ~ movie.slug ~ '?' ~ (episode_qs[1:] ~ '&' if episode_qs else ''), 'rpage', '#resenas') }}
 {% endblock %}

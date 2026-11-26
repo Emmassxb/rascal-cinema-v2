@@ -19,14 +19,16 @@ class TemplateSyntaxTests(unittest.TestCase):
 
     def test_every_template_parses(self) -> None:
         names = sorted(p.name for p in TEMPLATE_DIR.glob("*.html"))
-        self.assertEqual(len(names), 13)  # 12 originales + settings.html
+        # 13 de v2.1 + login_verify, partner_episode y partner_person (v2.2)
+        self.assertEqual(len(names), 16)
         for name in names:
             with self.subTest(template=name):
                 self.env.parse(self.env.loader.get_source(self.env, name)[0])  # type: ignore[union-attr]
 
     def test_expected_pages_exist(self) -> None:
         for name in ("base.html", "macros.html", "movie.html", "user.html", "settings.html",
-                     "partner_list.html", "partner_edit.html", "login.html"):
+                     "partner_list.html", "partner_edit.html", "login.html", "login_verify.html",
+                     "partner_episode.html", "partner_person.html"):
             self.assertTrue((TEMPLATE_DIR / name).is_file(), name)
 
 

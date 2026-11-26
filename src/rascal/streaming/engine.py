@@ -280,7 +280,7 @@ class LibtorrentEngine:
         lt, s = self.lt, self.settings
         port = s.lt_listen_port
         return {
-            "listen_interfaces": f"0.0.0.0:{port},[::]:{port}",
+            "listen_interfaces": s.lt_listen_interfaces or f"0.0.0.0:{port},[::]:{port}",
             "alert_mask": int(lt.alert_category.error | lt.alert_category.status | lt.alert_category.storage),
             "alert_queue_size": 10_000,
             "enable_dht": s.lt_enable_dht,

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="margin-bottom:14px;">
+  {% if back %}<a href="{{ back }}">← Volver</a> · {% endif %}<a href="/person/{{ person.slug }}">Ver perfil público</a>
+</div>
+<form class="panel" method="post" action="/partner/person/{{ person.id }}" id="person-editor">
+  <input type="hidden" name="back" value="{{ back }}">
+  <h2>Biografía de {{ person.name }}</h2>
+
+  <div style="background:var(--surface-2);padding:14px;border-radius:8px;margin-bottom:16px;">
+    <label for="tmdb_person_ref">Enlace o ID de TMDB (themoviedb.org/person/…)</label>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <input type="text" id="tmdb_person_ref" value="{{ f.tmdb_person_id or '' }}" style="flex:1 1 280px;" {{ '' if tmdb_enabled else 'disabled' }}>
+      <button class="btn btn-secondary" type="button" id="person-import" data-url="/partner/person/{{ person.id }}/tmdb" {{ '' if tmdb_enabled else 'disabled' }}>Importar de TMDB</button>
+      <button class="btn btn-secondary" type="button" id="person-search" {{ '' if tmdb_enabled else 'disabled' }}>Buscar «{{ person.name }}» en TMDB</button>
+    </div>
+    <small class="muted">{% if tmdb_enabled %}Importa biografía (es-MX, o inglés si no hay traducción), foto, fechas y lugar de nacimiento. Revisa antes de guardar.{% else %}Importación desactivada: define RASCAL_TMDB_API_KEY. Puedes escribir la biografía a mano.{% endif %}</small>
+    <div id="person-status" role="status" class="small" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="form-grid">
+    <div><label>Nombre *</label><input type="text" name="name" value="{{ f.name }}" required></div>
+    <div><label>Conocido por</label><input type="text" name="known_for_department" value="{{ f.known_for_department or '' }}" placeholder="Actuación, Dirección…"></div>
+    <div><label>Fecha de nacimiento</label><input type="date" name="birth_date" value="{{ f.birth_date.isoformat() if f.birth_date else '' }}"></div>
+    <div><label>Fecha de fallecimiento</label><input type="date" name="death_date" value="{{ f.death_date.isoformat() if f.death_date else '' }}"></div>
+    <div><label>Lugar de nacimiento</label><input type="text" name="place_of_birth" value="{{ f.place_of_birth or '' }}"></div>
+    <div><label>Fotografía (URL)</label><input type="text" name="photo_path" value="{{ f.photo_path or '' }}" placeholder="https://image.tmdb.org/t/p/w500/…"></div>
+  </div>
+  <input type="hidden" name="tmdb_person_id" value="{{ f.tmdb_person_id or '' }}">
+  <label for="bio">Biografía (sin límite práctico de extensión; los saltos de línea se respetan)</label>
+  <textarea id="bio" name="bio" style="min-height:320px;">{{ f.bio or '' }}</textarea>
+  <button class="btn" type="submit" style="margin-top:12px;">Guardar biografía</button>
+</form>
+
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  var form = document.getElementById('person-editor');
+  var status = document.getElementById('person-status');
+  var base = document.getElementById('person-import').getAttribute('data-url');
+  function fill(fields) {
+    var n = 0;
+    Object.keys(fields).forEach(function (k) {
+      var el = form.elements[k];
+      if (el && fields[k]) { el.value = fields[k]; n += 1; }
+    });
+    return n;
+  }
+  function get(url) {
+    status.textContent = 'Consultando TMDB…';
+    return fetch(url, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (!d.ok) { throw new Error(d.error || 'No se pudo consultar TMDB.'); } return d; });
+  }
+  function importRef(ref) {
+    get(base + '?ref=' + encodeURIComponent(ref))
+      .then(function (d) { status.textContent = 'Importados ' + fill(d.fields) + ' campos. ' + (d.notes || []).join(' ') + ' Revisa y guarda.'; })
+      .catch(function (e) { status.textContent = e.message; });
+  }
+  document.getElementById('person-import').addEventListener('click', function () {
+    var ref = document.getElementById('tmdb_person_ref').value.trim();
+    if (!ref) { status.textContent = 'Escribe un enlace o ID, o usa la búsqueda por nombre.'; return; }
+    importRef(ref);
+  });
+  document.getElementById('person-search').addEventListener('click', function () {
+    get(base).then(function (d) {
+      status.textContent = d.candidates.length ? 'Elige la persona correcta:' : 'Sin resultados en TMDB.';
+      d.candidates.forEach(function (c) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'pill';
+        b.textContent = c.name + (c.department ? ' · ' + c.department : '') + (c.known_for.length ? ' (' + c.known_for.join(', ') + ')' : '');
+        b.addEventListener('click', function () { document.getElementById('tmdb_person_ref').value = c.id; importRef(String(c.id)); });
+        status.appendChild(document.createElement('br'));
+        status.appendChild(b);
+      });
+    }).catch(function (e) { status.textContent = e.message; });
+  });
+})();
+</script>
+{% endblock %}

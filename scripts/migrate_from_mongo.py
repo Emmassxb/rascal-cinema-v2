@@ -313,6 +313,11 @@ class Migrator:
         self.migrate_links()
         self.migrate_reviews()
         self.migrate_social()
+        # Las reseñas se insertan en bloque (insert core) y no pasan por los listeners del ORM:
+        # se recalculan aquí los agregados de movies (rating_avg, popularity…) en la misma transacción.
+        from rascal.data.stats import rebuild_all_stats
+
+        self.stats["titles_with_stats"] = rebuild_all_stats(self.session)
         return self.stats
 
 

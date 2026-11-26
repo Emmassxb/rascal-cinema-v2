@@ -1,5 +1,10 @@
 # Rascal Does Not Dream of Cinema — Arquitectura v2
 
+> **Estado actual (v2.2).** La UI prevista en Streamlit se sustituyó en v2.1 por una interfaz web
+> FastAPI + Jinja2 (`rascal/web.py` + `rascal/webui/`) montada en el mismo proceso que el
+> microservicio de streaming. Las secciones 1–7 describen la evolución desde el monolito Flask y
+> siguen siendo válidas para datos, RBAC y P2P; la sección 8 documenta lo añadido en v2.2.
+
 Este documento describe la evolución del monolito Flask + MongoDB (`app.py`) hacia una arquitectura por capas con:
 
 - una capa de datos relacional,
@@ -280,3 +285,62 @@ pytest -m "not p2p"     # sin la prueba BitTorrent de extremo a extremo
 - Usa `RASCAL_DATABASE_URL=postgresql+psycopg://…` y añade `psycopg[binary]`.
 - Activa los índices `pg_trgm` que aparecen al final de `docs/schema.sql`.
 - Pon el streamer detrás de un proxy (nginx/Caddy) con `proxy_buffering off` en `/stream` y `/remux`.
+
+
+## 8. v2.2 · Arquitectura modular estilo Stremio
+
+### 8.1 Proveedores (`rascal/providers/`)
+
+Stremio separa catálogo/metadatos, subtítulos y streams en add-ons que la app consulta por tipo de
+recurso. Aquí la misma separación vive dentro del proceso:
+
+| Contrato | Implementaciones | Usado por |
+|---|---|---|
+| `MetadataProvider.lookup(kind, ref)` | `TmdbMetadataProvider` (película, serie, persona; es-MX con respaldo en-US), `ManualMetadataProvider` | `/partner/tmdb-lookup`, editor de personas, importación de temporadas |
+| `WatchProvider.suggest(...)` | `TmdbWatchProvider` (`/watch/providers`, región `RASCAL_TMDB_REGION`) | "Dónde ver" en el panel |
+| `StreamProvider.plan(source)` → `PlaybackPlan` | `P2PStreamProvider` (torrent/magnet), `DirectStreamProvider` (MP4/WebM/MKV por HTTPS, HLS) | ficha (`/movie/{slug}`), `/player/{id}`, `CatalogService` |
+| `SubtitleProvider` | `LocalSubtitleProvider` (.srt/.vtt → WebVTT, por película o capítulo) | panel, reproductor |
+
+`build_registry(settings)` construye el registro; para añadir un origen (otro catálogo,
+OpenSubtitles, un CDN propio) se implementa el contrato y se registra, sin tocar `web.py`.
+
+`PlaybackPlan.needs_engine` decide si al pulsar «Reproducir» se arranca libtorrent
+(`StreamerClient.start`) o sólo se emite el token del reproductor. `exposes_server_ip` activa el
+aviso de privacidad P2P.
+
+### 8.2 Series
+
+`movies.media_type` ∈ {`movie`, `series`}. Las series reutilizan ficha, créditos, géneros,
+reseñas, watchlist y "Dónde ver", y añaden `seasons` (1:N) → `episodes` (1:N). Las fuentes de una
+serie se asocian a un capítulo (`media_sources.episode_id`; `movie_id` sigue apuntando a la serie,
+así las cascadas y los conteos por título son triviales). Los subtítulos de capítulo viven en
+`var/subtitles/episodes/<episode_id>/` y se sirven en `/subtitles/episode/<id>/<archivo>`.
+
+Limitación conocida: el motor elige un único archivo por torrent, así que un *season pack* no
+puede repartirse entre capítulos; cada capítulo P2P necesita su propio torrent/magnet (los enlaces
+directos y HLS no tienen esta restricción).
+
+### 8.3 Reproductor
+
+`player.html` (Video.js 8) recibe todas las versiones hermanas (misma película o mismo capítulo)
+con idioma, calidad y tipo. Muestra selectores de **idioma**, **calidad** y **subtítulos** encima
+del video y los mismos menús de idioma y calidad dentro de la barra de controles. Las pistas de
+audio internas (`player.audioTracks()`, HLS multi-audio o Safari) aparecen en el menú de idioma y
+se cambian sin recargar; cambiar a otra versión recarga el iframe conservando la posición
+(`?t=`), lo que libera el MediaSource anterior y evita bloqueos al alternar P2P/MP4/HLS. El iframe
+informa su altura a la ficha por `postMessage` (mismo origen). Probado en Chromium con
+`tests/e2e/player_e2e.py`.
+
+### 8.4 Seguridad transversal (`rascal/security/`)
+
+`SecurityMiddleware` (ASGI) aplica rate limiting por IP (login, registro, 2FA, `/api/*`),
+verificación de `Origin`/`Referer` en POST (estricta en `prod`), CSP con nonce por petición y
+cabeceras de seguridad. `validate_external_url` bloquea esquemas peligrosos y destinos privados en
+toda URL enviada por usuarios. El login con 2FA pasa por `/login/verify` con un reto firmado de
+10 minutos (antes el segundo factor se podía saltar).
+
+### 8.5 Rendimiento
+
+Agregados desnormalizados en `movies` mantenidos por `rascal/data/stats.py`, índices compuestos,
+paginación con tope de 200 filas y proyecciones ligeras. Detalle y mediciones con 86 000 títulos
+en [`BASE_DE_DATOS.md`](BASE_DE_DATOS.md); despliegue en [`DEPLOY_LINUX.md`](DEPLOY_LINUX.md).
